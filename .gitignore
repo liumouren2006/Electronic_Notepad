@@ -23,5 +23,3 @@ c_legacy/notebook
 c_legacy/notebook.exe
 c_legacy/*.o
 
-# 第三方压缩包（源码已解压）
-third_party/imgui.zip

@@ -147,19 +147,19 @@ int seed_demo(Repository& repo) {
         repo.set_done(ids[6], true);
     }
     // 生成演示附件
-    fs::path tmp_cover = repo.store.dir / "_demo_cover.bmp";
+    fs::path tmp_cover = repo.store.dir / "moji-cover.bmp";
     write_bytes_atomic(tmp_cover, make_cover_bmp());
     repo.add_attachment(ids[0], tmp_cover);
     std::error_code ec;
     fs::remove(tmp_cover, ec);
 
-    fs::path tmp_wav = repo.store.dir / "_demo_ding.wav";
+    fs::path tmp_wav = repo.store.dir / "moji-ding.wav";
     Bytes wav = make_wav();
     write_bytes_atomic(tmp_wav, wav);
     repo.add_attachment(ids[2], tmp_wav);
     fs::remove(tmp_wav, ec);
 
-    fs::path tmp_txt = repo.store.dir / "_demo_outline.txt";
+    fs::path tmp_txt = repo.store.dir / "答辩提纲.txt";
     write_file_atomic(tmp_txt,
                       "一、需求分析\n二、数据结构：优先级单向链表\n三、存储：UTF-8 JSON + 附件目录\n"
                       "四、TUI / GUI 双界面\n五、容错与自动备份\n六、演示\n");

@@ -389,7 +389,7 @@ private:
     void draw() {
         int w = std::max(80, console_.width() - 1);
         int h = std::max(20, console_.height() - 1);
-        int sw = w >= 118 ? 46 : 40;
+        int sw = 44;
         if (w < 90) sw = 34;
         int dw = w - sw - 1;
         last_sidebar_w_ = sw;
@@ -399,14 +399,18 @@ private:
         Stats stats = repo_.stats();
         std::vector<std::string> lines;
 
-        std::string header = std::string(C_BAR) + " " + fg(230, 233, 239) +
-                             "墨记 MoJi" + fg(139, 147, 167) + "  ·  C++ 电子记事本";
-        std::string right = "今日 " + std::to_string(stats.today) + "　逾期 " +
-                            std::to_string(stats.overdue) + "　待办 " +
-                            std::to_string(stats.pending) + "　" + clock_str(now_time()) + " ";
-        int rw = visible_width(right);
-        int pad = std::max(1, w - visible_width(header) - rw);
-        header += std::string((size_t)pad, ' ') + fg(139, 147, 167) + right;
+        std::string left = std::string(C_BAR) + " " + fg(230, 233, 239) + "◉ 墨记 MoJi";
+        std::string center = "— 电子记事本 · TUI";
+        std::string right = clock_str(now_time()) + " ";
+        int left_w = visible_width(left);
+        int center_w = display_width(center);
+        int right_w = visible_width(right);
+        int center_x = std::max(left_w + 1, (w - center_w) / 2);
+        int pad1 = std::max(1, center_x - left_w);
+        int pad2 = std::max(1, w - center_x - center_w - right_w);
+        std::string header = left + std::string((size_t)pad1, ' ') +
+                             fg(139, 147, 167) + center +
+                             std::string((size_t)pad2, ' ') + fg(139, 147, 167) + right;
         lines.push_back(pad_line(header, w) + RESET);
 
         std::vector<std::string> side;
@@ -439,12 +443,11 @@ private:
     void build_sidebar(std::vector<std::string>& side, int sw, const Stats& stats) {
         auto add = [&](const std::string& line) { side.push_back(pad_line(line, sw)); };
         add(std::string(C_PANEL) + " " + fg(139, 147, 167) + "今日 " + fg(124, 156, 255) +
-            std::to_string(stats.today) + "　　" + fg(139, 147, 167) + "待办 " +
-            std::to_string(stats.pending));
-        add(std::string(C_PANEL) + " " + fg(139, 147, 167) + "逾期 " +
+            std::to_string(stats.today) + "　　" + fg(139, 147, 167) + "逾期 " +
             fg(stats.overdue ? 248 : 139, stats.overdue ? 113 : 147,
-               stats.overdue ? 113 : 167) +
-            std::to_string(stats.overdue) + "　　" + fg(139, 147, 167) + "完成 " +
+               stats.overdue ? 113 : 167) + std::to_string(stats.overdue));
+        add(std::string(C_PANEL) + " " + fg(139, 147, 167) + "待办 " + fg(230, 233, 239) +
+            std::to_string(stats.pending) + "　　" + fg(139, 147, 167) + "完成 " +
             fg(74, 222, 128) + std::to_string(stats.rate) + "%");
         std::string search_line = std::string(C_PANEL) + " " + fg(90, 100, 125) + "/ " +
                                   (search_.empty() ? "搜索标题、标签、正文…"
@@ -455,7 +458,7 @@ private:
         add(std::string(C_PANEL));
 
         int idx = current_index();
-        int rows = std::max(1, (console_.height() - 2 - 6) / 2);
+        int rows = std::max(1, (console_.height() - 2 - 6 - 2) / 2);
         if (idx >= 0) {
             if (idx < scroll_) scroll_ = idx;
             if (idx >= scroll_ + rows) scroll_ = idx - rows + 1;
@@ -492,6 +495,10 @@ private:
             }
             add(line2);
         }
+        while ((int)side.size() < console_.height() - 4) add(std::string(C_PANEL));
+        add(std::string(C_PANEL) + " " + fg(86, 96, 122) +
+            "↑↓ 选择  Space 勾选  a 新增  ? 帮助");
+        add(std::string(C_PANEL));
         while ((int)side.size() < console_.height() - 2) add(std::string(C_PANEL));
     }
 
@@ -539,10 +546,40 @@ private:
         if (e->note.empty()) {
             add(std::string(C_DETAIL) + " " + fg(90, 100, 125) + "暂无备注，按 e 编辑");
         } else {
-            auto wrapped = wrap_display(e->note, dw - 4);
-            for (const auto& line : wrapped) {
-                if (remaining-- <= 0) break;
-                add(std::string(C_DETAIL) + "  " + fg(196, 201, 214) + line);
+            for (const auto& raw : split(e->note, '\n')) {
+                std::string text = raw;
+                std::string prefix;
+                std::string color = fg(196, 201, 214);
+                if (text.rfind("### ", 0) == 0) {
+                    text = text.substr(4);
+                    color = fg(230, 233, 239);
+                } else if (text.rfind("## ", 0) == 0) {
+                    text = text.substr(3);
+                    color = fg(230, 233, 239);
+                } else if (text.rfind("# ", 0) == 0) {
+                    text = text.substr(2);
+                    color = fg(230, 233, 239);
+                } else if (text.rfind("- [x] ", 0) == 0) {
+                    text = text.substr(6);
+                    prefix = "☑ ";
+                    color = fg(139, 147, 167);
+                } else if (text.rfind("- [ ] ", 0) == 0) {
+                    text = text.substr(6);
+                    prefix = "☐ ";
+                } else if (text.rfind("- ", 0) == 0) {
+                    text = text.substr(2);
+                    prefix = "• ";
+                } else if (text.rfind("> ", 0) == 0) {
+                    text = text.substr(2);
+                    prefix = "│ ";
+                    color = fg(139, 147, 167);
+                }
+                auto wrapped = wrap_display(prefix + text, dw - 4);
+                for (const auto& line : wrapped) {
+                    if (remaining-- <= 0) break;
+                    add(std::string(C_DETAIL) + "  " + color + line);
+                }
+                if (remaining <= 0) break;
             }
         }
         if (!e->attachments.empty()) {
@@ -664,7 +701,7 @@ private:
 
     void handle_mouse(const Key& key) {
         if (key.x >= last_sidebar_w_ || key.y < last_list_top_) return;
-        int rows = std::max(1, (console_.height() - 2 - 6) / 2);
+        int rows = std::max(1, (console_.height() - 2 - 6 - 2) / 2);
         int rel = key.y - last_list_top_;
         int row = rel / 2;
         int idx = scroll_ + row;

@@ -9,6 +9,11 @@ $stage = Join-Path $root "dist\moji-cpp-1.0.0"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item "build\moji.exe", "build\moji-gui.exe" $stage
+Get-ChildItem (Join-Path $root "build") -Filter "*.dll" -File | Copy-Item -Destination $stage -Force
+foreach ($dir in @("platforms","styles","imageformats","iconengines","tls","networkinformation","generic","platforminputcontexts")) {
+    $src = Join-Path $root "build\$dir"
+    if (Test-Path $src) { Copy-Item $src (Join-Path $stage $dir) -Recurse -Force }
+}
 Copy-Item "README.md" $stage -ErrorAction SilentlyContinue
 Copy-Item "docs" (Join-Path $stage "docs") -Recurse -ErrorAction SilentlyContinue
 $zip = Join-Path $root "dist\moji-cpp-1.0.0.zip"

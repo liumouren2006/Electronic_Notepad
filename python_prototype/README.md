@@ -97,8 +97,11 @@ moji
 只想要终端版可以不装 Qt：`pip install -e ".[tui]"`；只想要 GUI：`pip install -e ".[gui]"`；核心库与命令行不需要任何第三方依赖。
 
 > 国内网络建议加镜像：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e ".[all]"`。
-> 如果 pip 被系统代理卡住：`NO_PROXY="*" pip install ...`。
-> 若 pip 构建隔离拉不到 setuptools，可先 `pip install -U setuptools wheel`，再加 `--no-build-isolation`。
+> 如果 pip 被系统代理卡住（本机系统代理 127.0.0.1:7890 会被 Python 误当成 HTTPS 代理）：
+> - PowerShell：`$env:NO_PROXY='*'` 后再执行 pip；
+> - Bash：`NO_PROXY="*" pip install ...`。
+> 若 pip 构建隔离拉不到 `setuptools`，先 `pip install -U setuptools wheel`，再加 `--no-build-isolation`。
+> `install.ps1` 已内置以上处理：自动设置 `NO_PROXY`、失败时切清华镜像、用 `--no-build-isolation` 构建。
 
 ### 启动
 

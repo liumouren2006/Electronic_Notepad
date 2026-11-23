@@ -1,6 +1,6 @@
 # 墨记 MoJi · 电子记事本（C++17）
 
-> 课程设计《电子记事本的实现》主实现：**C++17 + 单向优先级链表 + UTF-8 文本存储 + 控制台 TUI + Dear ImGui / DirectX11 图形界面**。
+> 课程设计《电子记事本的实现》主实现：**C++17 + 单向优先级链表 + UTF-8 文本存储 + 控制台 TUI + Qt6 Widgets 图形界面**。
 >
 > 仓库内另有：
 > - `c_legacy/`：C89 单文件基础版（菜单循环 + 链表 + 文本文件 + 蜂鸣）。
@@ -47,7 +47,7 @@
 ### 拓展功能
 
 - **控制台 TUI**：侧边栏实时显示任务、统计、标签；`Space` 勾选；鼠标点左侧方框勾选；双击编辑；模态输入表单；`Ctrl+Z/Y`；到点响铃 + 提醒条。
-- **ImGui GUI**：Material 风格浅色/深色主题、卡片列表、内联编辑、自动保存、统计卡、标签筛选、搜索。
+- **Qt GUI**：Qt6 Widgets + QSS，Material 风格浅色/深色主题、卡片列表、内联编辑、自动保存、统计卡、标签筛选、搜索。
 - **附件**：拖文件进窗口即添加；图片显示缩略图；双击用系统程序打开；右键移除；支持任意文件/音频。
 - **粘贴图片**：按钮读取 Windows 剪贴板图片，保存为 PNG 附件。
 - **手绘笔迹**：GUI 内置画板（颜色、粗细、撤销、清空），保存为 PNG 附件。
@@ -63,9 +63,13 @@
 
 ### 前置条件
 
-- Windows 11（GUI 使用 DirectX11；Windows 10 同样可用）
-- **MSYS2 UCRT64** 的 `g++`（本机测试版本 15.2.0），确保 `C:\msys64\ucrt64\bin` 在 PATH 中
-- 无需安装 Qt / .NET；ImGui 与 nlohmann/json 已随仓库提供
+- Windows 11（Windows 10 同样可用）
+- **MSYS2 UCRT64** 的 `g++`（本机测试版本 15.2.0）、`qmake6`、`mingw32-make`、`windeployqt`，确保 `C:\msys64\ucrt64\bin` 在 PATH 中
+- Qt6 与 nlohmann/json：Qt 用 MSYS2 包安装（见下），json 已随仓库提供
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-tools
+```
 
 ### 一键构建
 
@@ -87,7 +91,7 @@ bash build.sh
 
 ```
 build\moji.exe       控制台版：CLI / TUI / GUI（moji gui）
-build\moji-gui.exe   窗口版：双击直接打开 GUI，无控制台
+build\moji-gui.exe   窗口版 Qt GUI（旁边带 Qt 运行库，双击即用）
 build\test_core.exe  C++ 核心测试（62 个检查）
 ```
 
@@ -100,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 脚本会：
 
 1. 调用 `build.bat` 编译；
-2. 复制两个 exe 到 `%LOCALAPPDATA%\MoJi\bin`；
+2. 复制 exe、Qt 运行库（DLL + platforms/styles/imageformats 等插件）到 `%LOCALAPPDATA%\MoJi\bin`；
 3. 把该目录写入**用户 PATH**；
 4. 创建开始菜单快捷方式「墨记 MoJi」。
 
@@ -298,7 +302,8 @@ ImportReport import_bundle(Repository&, path, bool merge);
 void export_todotxt / import_todotxt / export_markdown;
 
 // GUI
-int run_gui(Repository& repo, const std::string& screenshot_path = "");
+int run_gui(Repository& repo, const std::string& screenshot_path = "");  // 启动 moji-gui.exe
+int run_qt_gui(int argc, char** argv);                                        // Qt GUI 入口
 ```
 
 完整说明见 [`docs/设计说明.md`](docs/设计说明.md)。
@@ -326,15 +331,7 @@ build\test_core.exe
 
 输出：`checks=62 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
 
-图像模块测试（GDI+）：
-
-```bat
-g++ -std=c++17 -O2 -Isrc -Ithird_party tests\test_imaging.cpp src\gui\imaging.cpp src\core\util.cpp ^
-    -o build\test_imaging.exe -static -lgdiplus -lgdi32 -lole32 -luuid
-build\test_imaging.exe
-```
-
-UI 验证：TUI 已在 ConPTY 中实测新增/编辑/勾选/调序/撤销/退出；GUI 通过 `--screenshot` 离屏渲染浅色/深色截图，窗口版 `moji-gui.exe` 同样验证。
+UI 验证：TUI 已在 ConPTY 中实测新增/编辑/勾选/调序/撤销/退出；Qt GUI 通过 `--screenshot` 离屏渲染浅色/深色截图，并在去掉 MSYS2 PATH 的环境下验证 `moji-gui.exe` + Qt 运行库可独立启动；`moji.exe gui` 启动器也已验证。
 
 Python 原型保留 40 项测试，见 `python_prototype/`。
 
@@ -374,7 +371,7 @@ moji
 
 ## 已知限制
 
-- GUI 使用 **Win32 + DirectX11 + ImGui**，目前仅 Windows；Linux 下构建脚本会生成核心 + 菜单式 TUI/CLI。
+- GUI 使用 **Qt6 Widgets**，本身跨平台；本机只验证了 Windows。Linux 下 `build.sh` 目前构建核心 + 菜单式 TUI/CLI，Qt GUI 需要自行用 qmake 构建（代码没有 Windows 专属依赖）。
 - C++ 版没有 pip 包（C++ 无法直接 pip 安装）；提供 `install.ps1` 便携安装与 `package.ps1` 打包。
 - 附件支持拖入、缩略图、打开、移除；尚未实现附件坞内拖动排序（Python 原型已实现，可参考移植）。
 - 音频附件调用系统默认播放器，未内置播放控件。
@@ -385,9 +382,9 @@ moji
 
 ## 第三方库
 
-- [Dear ImGui](https://github.com/ocornut/imgui) v1.91.0（MIT），`third_party/imgui/`
+- [Qt6 Widgets](https://www.qt.io/) 6.10.1（LGPL/GPL 双许可），通过 MSYS2 UCRT64 安装，不随仓库复制源码
 - [nlohmann/json](https://github.com/nlohmann/json) v3.11.3（MIT），单头文件 `third_party/nlohmann/json.hpp`
-- 许可证原文见 `third_party/LICENSE-imgui.txt`、`third_party/LICENSE-nlohmann.txt`
+- 许可证原文见 `third_party/LICENSE-nlohmann.txt`；Qt 许可见 MSYS2 包内 `share/licenses/qt6-base/`
 
 ## 相关文档
 

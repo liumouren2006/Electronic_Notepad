@@ -84,23 +84,26 @@ void test_repository() {
         CHECK_EQ(a.priority, 1);
         CHECK_EQ(b.priority, 2);
         Event& c = repo.add("插队", "", std::nullopt, {}, 2);
+        const std::string aid = a.id;
+        const std::string bid = b.id;
+        const std::string cid = c.id;
         CHECK_EQ(c.priority, 2);
-        CHECK_EQ(repo.find(b.id)->priority, 3);
+        CHECK_EQ(repo.find(bid)->priority, 3);
         CHECK_EQ(repo.events.at(1)->title, "第一件事");
         CHECK_EQ(repo.events.at(2)->title, "插队");
-        repo.update(a.id, "第一件事（改）", "新备注", parse_datetime("2026-12-01 10:00"),
+        repo.update(aid, "第一件事（改）", "新备注", parse_datetime("2026-12-01 10:00"),
                     {"课程", "重要"}, 15);
-        CHECK_EQ(repo.find(a.id)->title, "第一件事（改）");
-        CHECK_EQ(repo.find(a.id)->tags.size(), (size_t)2);
-        CHECK(repo.find(a.id)->due.has_value());
-        repo.set_done(b.id, true);
-        CHECK(repo.find(b.id)->done);
-        repo.move_by(c.id, -1);
-        CHECK_EQ(repo.find(c.id)->priority, 1);
+        CHECK_EQ(repo.find(aid)->title, "第一件事（改）");
+        CHECK_EQ(repo.find(aid)->tags.size(), (size_t)2);
+        CHECK(repo.find(aid)->due.has_value());
+        repo.set_done(bid, true);
+        CHECK(repo.find(bid)->done);
+        repo.move_by(cid, -1);
+        CHECK_EQ(repo.find(cid)->priority, 1);
         CHECK(repo.undo());
-        CHECK_EQ(repo.find(c.id)->priority, 2);
+        CHECK_EQ(repo.find(cid)->priority, 2);
         CHECK(repo.redo());
-        CHECK_EQ(repo.find(c.id)->priority, 1);
+        CHECK_EQ(repo.find(cid)->priority, 1);
         // 持久化
         Repository again(dir);
         CHECK_EQ(again.events.size(), (size_t)3);

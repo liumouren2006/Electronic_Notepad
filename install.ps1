@@ -18,10 +18,22 @@ if (-not $NoBuild) {
     }
 }
 
+$build = Join-Path $root "build"
 $dest = Join-Path $env:LOCALAPPDATA "MoJi\bin"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Copy-Item (Join-Path $root "build\moji.exe") $dest -Force
-Copy-Item (Join-Path $root "build\moji-gui.exe") $dest -Force
+Copy-Item (Join-Path $build "moji.exe") $dest -Force
+Copy-Item (Join-Path $build "moji-gui.exe") $dest -Force
+# Qt 运行库（windeployqt 产物）与 MinGW/ICU 依赖
+Get-ChildItem $build -Filter "*.dll" -File | Copy-Item -Destination $dest -Force
+foreach ($dir in @("platforms","styles","imageformats","iconengines","tls","networkinformation","generic","platforminputcontexts")) {
+    $src = Join-Path $build $dir
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $dest $dir) -Recurse -Force
+    }
+}
+if (-not (Test-Path (Join-Path $dest "Qt6Core.dll"))) {
+    Write-Warning "未找到 Qt6 运行库；moji-gui.exe 可能无法启动。请重新运行 build.bat。"
+}
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $already = $false

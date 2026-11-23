@@ -30,9 +30,21 @@ try {
         throw "未找到 Python。请先安装 Python 3.9+（安装时勾选 Add Python to PATH）。"
     }
 
+    # 本机的系统代理是 127.0.0.1:7890，Python 会把它误当成 HTTPS 代理，
+    # 导致 pip 报 ProxyError；这里让 pip 直连。
+    $env:NO_PROXY = "*"
+    $env:no_proxy = "*"
+
     Write-Host "使用 Python: $python"
     Write-Host "升级 pip / setuptools / wheel ..."
     & $python -m pip install --upgrade pip setuptools wheel
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "默认 PyPI 失败，尝试清华镜像..."
+        & $python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --upgrade pip setuptools wheel
+        if ($LASTEXITCODE -ne 0) {
+            throw "无法下载 pip 构建依赖。请检查网络后重试，或手动执行：`$env:NO_PROXY='*'"
+        }
+    }
 
     if ($NoGui) {
         $extras = "tui"
@@ -42,12 +54,23 @@ try {
         $extras = "all"
     }
 
-    $pipArgs = @("install")
+    # 已经升级过 setuptools，直接用本地构建，避免构建隔离再次联网下载
+    $pipArgs = @("install", "--no-build-isolation")
     if (-not $inVenv) { $pipArgs += "--user" }
     $pipArgs += ".[$extras]"
 
     Write-Host "安装 moji-note[$extras] ..."
     & $python -m pip @pipArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "首次安装失败，改用镜像 + 构建隔离重试..."
+        $retry = @("install", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
+        if (-not $inVenv) { $retry += "--user" }
+        $retry += ".[$extras]"
+        & $python -m pip @retry
+        if ($LASTEXITCODE -ne 0) {
+            throw "安装失败。请把完整输出发给开发者，或尝试在虚拟环境中安装（见 README）。"
+        }
+    }
 
     if ($inVenv) {
         $scripts = Join-Path $env:VIRTUAL_ENV "Scripts"
@@ -86,7 +109,6 @@ try {
     } else {
         Write-Host "安装命令已完成，但没找到 moji.exe；可尝试：$python -m moji --help"
     }
-    Write-Host "如果 pip 卡在系统代理，请先执行：`$env:NO_PROXY='*'"
 }
 finally {
     Pop-Location
