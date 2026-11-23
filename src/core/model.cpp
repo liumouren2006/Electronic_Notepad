@@ -83,7 +83,9 @@ json Event::to_json() const {
                 {"updated_at", time_str(updated_at)},
                 {"remind_before", remind_before},
                 {"last_reminded_at", time_str(last_reminded_at)},
-                {"color", color}};
+                {"color", color},
+                {"icon", icon},
+                {"page_layout", page_layout}};
 }
 
 Event Event::from_json(const json& j) {
@@ -128,6 +130,8 @@ Event Event::from_json(const json& j) {
     e.remind_before = std::max(0, j.value("remind_before", 0));
     e.last_reminded_at = opt_time(j, "last_reminded_at");
     e.color = j.value("color", "");
+    e.icon = j.value("icon", "");
+    e.page_layout = j.value("page_layout", "");
     if (e.done && !e.done_at.has_value()) {
         e.done_at = now_time();
     }

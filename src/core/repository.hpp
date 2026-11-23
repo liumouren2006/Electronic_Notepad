@@ -52,7 +52,12 @@ public:
     Event& update(const std::string& id, const std::string& title,
                   const std::string& note, std::optional<std::time_t> due,
                   std::vector<std::string> tags, int remind_before,
-                  std::optional<std::string> color = std::nullopt);
+                  std::optional<std::string> color = std::nullopt,
+                  std::optional<std::string> icon = std::nullopt,
+                  std::optional<std::string> page_layout = std::nullopt);
+    Event& set_visual(const std::string& id, std::optional<std::string> color,
+                      std::optional<std::string> icon = std::nullopt,
+                      std::optional<std::string> page_layout = std::nullopt);
     Event& set_done(const std::string& id, bool done);
     Event& toggle_done(const std::string& id);
     bool remove(const std::string& id);

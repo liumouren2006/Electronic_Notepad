@@ -12,6 +12,12 @@
 | --- | --- |
 | ![深色](docs/gui-dark.png) | ![TUI](docs/tui-preview.png) |
 
+| Markdown 预览 | 页面（墨迹 / 图片层） |
+| --- | --- |
+| ![预览](docs/gui-preview.png) | ![页面](docs/gui-page.png) |
+
+> 多选、主题色与自定义图标效果见 [`docs/gui-multi.png`](docs/gui-multi.png)。
+
 ---
 
 ## 目录
@@ -48,6 +54,13 @@
 
 - **控制台 TUI**：侧边栏实时显示任务、统计、标签；`Space` 勾选；鼠标点左侧方框勾选；双击编辑；模态输入表单；`Ctrl+Z/Y`；到点响铃 + 提醒条。
 - **Qt GUI**：Qt6 Widgets + QSS，Material 风格浅色/深色主题、卡片列表、内联编辑、自动保存、统计卡、标签筛选、搜索。
+- **优先级直接输入**：GUI 编辑器里的「优先级 Pn」数字框、TUI 新增/编辑表单里的位置；输入目标序号即可，原位置及之后自动顺延。
+- **Markdown 预览**：GUI 备注分为「编辑 / 预览 / 页面」三页；预览支持标题、列表、**粗体**、*斜体*、++下划线++、~~删除线~~、表格、`{color:#e11d48}彩色文字{/color}`、引用、代码。
+- **OneNote 风格页面**：页面页可直接用鼠标画墨迹（颜色/粗细/橡皮/撤销/清空），墨迹与文字/图片一起保存，不是附件。
+- **图片像图床一样嵌入**：页面页的图片可拖动、缩放、旋转、置顶/置底/删除；文字本身也是一个可移动、可调层的图层。
+- **每个事项可换图标/颜色**：编辑器「外观」可修改左侧竖杠颜色和图标（emoji/字符），卡片会显示图标。
+- **高度个性化**：GUI 可改主题色、选择 WAV 铃声；TUI 读取 `tui-theme.json` 改配色、侧栏宽度、是否显示提示、终端字体（Windows）。
+- **Ctrl / Shift 连选**：GUI 列表中 Ctrl 点选、Shift 范围选择、Ctrl+Shift 追加范围；多选后可批量完成/删除。
 - **附件**：拖文件进窗口即添加；图片显示缩略图；双击用系统程序打开；右键移除；支持任意文件/音频。
 - **粘贴图片**：按钮读取 Windows 剪贴板图片，保存为 PNG 附件。
 - **手绘笔迹**：GUI 内置画板（颜色、粗细、撤销、清空），保存为 PNG 附件。
@@ -92,7 +105,7 @@ bash build.sh
 ```
 build\moji.exe       控制台版：CLI / TUI / GUI（moji gui）
 build\moji-gui.exe   窗口版 Qt GUI（旁边带 Qt 运行库，双击即用）
-build\test_core.exe  C++ 核心测试（62 个检查）
+build\test_core.exe  C++ 核心测试（68 个检查）
 ```
 
 ### 安装到系统
@@ -146,6 +159,7 @@ build\moji-gui.exe                   :: 窗口版 GUI（读取 MOJI_HOME）
 | `o` | 查看附件（输入编号打开） |
 | `Ctrl+Z` / `Ctrl+Y` | 撤销 / 重做 |
 | `E` / `I` | 导出 / 导入 |
+| `T` | 重新加载 `tui-theme.json` |
 | `?` | 帮助 |
 | `q` | 退出 |
 
@@ -158,6 +172,27 @@ TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建
 - 右侧：标题、截止、提醒、标签、备注、附件；修改后约 0.7 秒自动保存。
 - 附件：从资源管理器拖入窗口、粘贴剪贴板图片、手绘、双击打开、右键移除。
 - 菜单/快捷键：`Ctrl+N` 新建、`Ctrl+S` 保存、`Ctrl+F` 搜索、`Ctrl+Alt+Z/Y` 撤销/重做、`F1` 帮助、`F5` 刷新。
+- 备注三页：
+  - **编辑**：Markdown 源文本，B/I/U/S/颜色/表格按钮；
+  - **预览**：自动渲染标题、列表、表格、粗体/斜体/下划线/删除线/彩色文字；
+  - **页面**：OneNote 风格画布，文字层 + 图片层 + 墨迹层；图片拖动、右下角缩放、顶部圆点旋转、置顶/置底/删除；墨迹直接画在页面上。
+- 外观：编辑器「外观」可改事项色条颜色和图标；「视图 → 主题色…」可改主色；「视图 → 选择铃声…」可选 WAV 提醒铃声。
+- 多选：Ctrl+点击切换、Shift+点击范围、Ctrl+Shift+点击追加范围；多选后出现「完成选中 / 删除选中」。
+
+### 个性化
+
+TUI：
+
+1. 复制 [`docs/tui-theme.example.json`](docs/tui-theme.example.json) 到数据目录，命名为 `tui-theme.json`；
+2. 可修改 `colors.*`、`sidebar_width`、`show_hint`、`font_face`、`font_size`；
+3. 启动时读取；运行中按 `T` 可重新加载；
+4. 终端字体由 Windows 控制台 API 设置，`font_face`/`font_size` 留空或 0 表示不修改。
+
+GUI：
+
+- 「视图 → 主题色…」选择主色并持久化到 `config.json` 的 `accent`；
+- 「视图 → 选择铃声…」选择 WAV 文件，保存到 `config.json` 的 `ringtone`；失败时回退系统蜂鸣；
+- 每个事项的 Color / Icon 保存在 `events.json` 的 `color` / `icon` 字段。
 
 ### 命令行
 
@@ -329,7 +364,7 @@ int run_qt_gui(int argc, char** argv);                                        //
 build\test_core.exe
 ```
 
-输出：`checks=62 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
+输出：`checks=68 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
 
 UI 验证：TUI 已在 ConPTY 中实测新增/编辑/勾选/调序/撤销/退出；Qt GUI 通过 `--screenshot` 离屏渲染浅色/深色截图，并在去掉 MSYS2 PATH 的环境下验证 `moji-gui.exe` + Qt 运行库可独立启动；`moji.exe gui` 启动器也已验证。
 
@@ -376,7 +411,11 @@ moji
 - 附件支持拖入、缩略图、打开、移除；尚未实现附件坞内拖动排序（Python 原型已实现，可参考移植）。
 - 音频附件调用系统默认播放器，未内置播放控件。
 - 备注按 Markdown 纯文本保存，GUI 不做实时 Markdown 渲染。
-- 主题、窗口大小持久化；数据默认不加密。
+- Markdown 是“部分渲染”：支持标题、列表、表格、粗体/斜体/下划线/删除线/彩色文字、引用、代码；不支持完整 CommonMark/脚注/嵌套复杂语法。
+- 自定义铃声目前播放 WAV（Windows `PlaySound`），MP3 会回退系统蜂鸣。
+- 页面里的图片可删除（记录在 `page_layout.hidden`，不会删附件文件）；如需重新显示，可重置该事件的 page_layout。
+- 附件坞的拖动排序仍保留；页面模式中附件栏会隐藏，图片统一在页面上操作。
+- 主题、窗口大小、主题色、铃声持久化；数据默认不加密。
 
 ---
 

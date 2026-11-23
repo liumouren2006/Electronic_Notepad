@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "core/importer.hpp"
+#include "core/sound.hpp"
 #include "core/util.hpp"
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -29,11 +31,6 @@ namespace moji {
 
 namespace {
 
-std::string fg(int r, int g, int b) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "\x1b[38;2;%d;%d;%dm", r, g, b);
-    return buf;
-}
 const char* RESET = "\x1b[0m";
 
 std::string strip_ansi(const std::string& s) {
@@ -61,10 +58,98 @@ std::string pad_line(std::string line, int width) {
     return line;
 }
 
-const char* C_PANEL = "\x1b[48;2;13;17;28m";
-const char* C_CARD = "\x1b[48;2;27;36;56m";
-const char* C_DETAIL = "\x1b[48;2;11;14;20m";
-const char* C_BAR = "\x1b[48;2;15;19;32m";
+struct Rgb {
+    int r = 255, g = 255, b = 255;
+};
+
+struct TuiTheme {
+    Rgb bg{11, 14, 20};
+    Rgb panel{13, 17, 28};
+    Rgb card{27, 36, 56};
+    Rgb detail{11, 14, 20};
+    Rgb bar{15, 19, 32};
+    Rgb text{230, 233, 239};
+    Rgb muted{139, 147, 167};
+    Rgb dim{86, 96, 122};
+    Rgb primary{124, 156, 255};
+    Rgb success{74, 222, 128};
+    Rgb warning{251, 191, 36};
+    Rgb error{248, 113, 113};
+    Rgb violet{167, 139, 250};
+    Rgb teal{45, 212, 191};
+    Rgb border{42, 49, 66};
+    Rgb note_text{196, 201, 214};
+    Rgb white{255, 255, 255};
+    int sidebar_width = 44;
+    bool show_hint = true;
+    std::string font_face;   // 留空表示不修改终端字体
+    int font_size = 0;
+};
+
+std::string fg(const Rgb& c) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "\x1b[38;2;%d;%d;%dm", c.r, c.g, c.b);
+    return buf;
+}
+std::string bg(const Rgb& c) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "\x1b[48;2;%d;%d;%dm", c.r, c.g, c.b);
+    return buf;
+}
+
+Rgb parse_hex(const std::string& text, const Rgb& fallback) {
+    std::string s = text;
+    if (!s.empty() && s[0] == '#') s.erase(s.begin());
+    if (s.size() != 6) return fallback;
+    try {
+        int v = std::stoi(s, nullptr, 16);
+        return Rgb{(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF};
+    } catch (...) {
+        return fallback;
+    }
+}
+
+TuiTheme load_tui_theme(const fs::path& data_dir) {
+    TuiTheme t;
+    fs::path path = data_dir / "tui-theme.json";
+    std::error_code ec;
+    if (!fs::exists(path, ec)) return t;
+    std::string text = read_file(path, nullptr);
+    if (text.empty()) return t;
+    try {
+        auto j = nlohmann::json::parse(text);
+        t.sidebar_width = std::max(30, std::min(60, j.value("sidebar_width", 44)));
+        t.show_hint = j.value("show_hint", true);
+        t.font_face = j.value("font_face", std::string(""));
+        t.font_size = j.value("font_size", 0);
+        if (j.contains("colors") && j["colors"].is_object()) {
+            const auto& c = j["colors"];
+            auto get = [&](const char* key, const Rgb& fallback) {
+                return c.contains(key) && c[key].is_string()
+                           ? parse_hex(c[key].get<std::string>(), fallback)
+                           : fallback;
+            };
+            t.bg = get("bg", t.bg);
+            t.panel = get("panel", t.panel);
+            t.card = get("card", t.card);
+            t.detail = get("detail", t.detail);
+            t.bar = get("bar", t.bar);
+            t.text = get("text", t.text);
+            t.muted = get("muted", t.muted);
+            t.dim = get("dim", t.dim);
+            t.primary = get("primary", t.primary);
+            t.success = get("success", t.success);
+            t.warning = get("warning", t.warning);
+            t.error = get("error", t.error);
+            t.violet = get("violet", t.violet);
+            t.teal = get("teal", t.teal);
+            t.border = get("border", t.border);
+            t.note_text = get("note", t.note_text);
+        }
+    } catch (...) {
+    }
+    return t;
+}
 
 struct Key {
     enum class Type {
@@ -177,6 +262,18 @@ public:
         MessageBeep(MB_ICONEXCLAMATION);
     }
 
+    void set_font(const std::string& face, int size) {
+        if (face.empty() || size <= 0) return;
+        CONSOLE_FONT_INFOEX info{};
+        info.cbSize = sizeof(info);
+        if (!GetCurrentConsoleFontEx(out_, FALSE, &info)) return;
+        std::wstring wide = to_wide(face);
+        wcsncpy(info.FaceName, wide.c_str(), LF_FACESIZE - 1);
+        info.dwFontSize.X = 0;
+        info.dwFontSize.Y = (SHORT)size;
+        SetCurrentConsoleFontEx(out_, FALSE, &info);
+    }
+
     Key read_key(int timeout_ms) {
         if (WaitForSingleObject(in_, (DWORD)timeout_ms) == WAIT_TIMEOUT) return Key{};
         for (;;) {
@@ -251,13 +348,17 @@ private:
 
 class Tui {
 public:
-    explicit Tui(Repository& repo) : repo_(repo) {}
+    explicit Tui(Repository& repo) : repo_(repo) {
+        theme_ = load_tui_theme(repo_.store.dir);
+        ringtone_ = repo_.store.load_config().value("ringtone", std::string(""));
+    }
 
     int run() {
         if (!console_.init()) {
             std::cerr << "无法初始化控制台。\n";
             return 2;
         }
+        console_.set_font(theme_.font_face, theme_.font_size);
         console_.enter_alt();
         last_mtime_ = repo_.mtime();
         refresh_visible(true);
@@ -279,6 +380,8 @@ public:
 private:
     Repository& repo_;
     Console console_;
+    TuiTheme theme_;
+    std::string ringtone_;
     std::string mode_ = "all";
     std::string search_;
     std::string selected_id_;
@@ -363,7 +466,9 @@ private:
     void tick() {
         auto due = repo_.due_reminders(now_time());
         if (!due.empty()) {
-            console_.beep();
+            if (ringtone_.empty() || !play_ringtone(ringtone_)) {
+                console_.beep();
+            }
             std::string msg = "⏰ ";
             for (size_t i = 0; i < due.size() && i < 4; ++i) {
                 if (i) msg += "；";
@@ -389,7 +494,7 @@ private:
     void draw() {
         int w = std::max(80, console_.width() - 1);
         int h = std::max(20, console_.height() - 1);
-        int sw = 44;
+        int sw = theme_.sidebar_width;
         if (w < 90) sw = 34;
         int dw = w - sw - 1;
         last_sidebar_w_ = sw;
@@ -399,7 +504,7 @@ private:
         Stats stats = repo_.stats();
         std::vector<std::string> lines;
 
-        std::string left = std::string(C_BAR) + " " + fg(230, 233, 239) + "◉ 墨记 MoJi";
+        std::string left = bg(theme_.bar) + " " + fg(theme_.text) + "◉ 墨记 MoJi";
         std::string center = "— 电子记事本 · TUI";
         std::string right = clock_str(now_time()) + " ";
         int left_w = visible_width(left);
@@ -409,8 +514,8 @@ private:
         int pad1 = std::max(1, center_x - left_w);
         int pad2 = std::max(1, w - center_x - center_w - right_w);
         std::string header = left + std::string((size_t)pad1, ' ') +
-                             fg(139, 147, 167) + center +
-                             std::string((size_t)pad2, ' ') + fg(139, 147, 167) + right;
+                             fg(theme_.muted) + center +
+                             std::string((size_t)pad2, ' ') + fg(theme_.muted) + right;
         lines.push_back(pad_line(header, w) + RESET);
 
         std::vector<std::string> side;
@@ -419,9 +524,9 @@ private:
         build_detail(detail, dw, body_h);
 
         for (int i = 0; i < body_h; ++i) {
-            std::string s = i < (int)side.size() ? side[(size_t)i] : std::string(C_PANEL);
-            std::string d = i < (int)detail.size() ? detail[(size_t)i] : std::string(C_DETAIL);
-            std::string line = pad_line(s, sw) + fg(42, 49, 66) + "│" + pad_line(d, dw);
+            std::string s = i < (int)side.size() ? side[(size_t)i] : bg(theme_.panel);
+            std::string d = i < (int)detail.size() ? detail[(size_t)i] : bg(theme_.detail);
+            std::string line = pad_line(s, sw) + fg(theme_.border) + "│" + pad_line(d, dw);
             lines.push_back(line + RESET);
         }
 
@@ -430,7 +535,7 @@ private:
         if (display_width(footer_plain) > w - 2) {
             footer_plain = truncate_display(footer_plain, w - 2);
         }
-        lines.push_back(pad_line(std::string(C_BAR) + " " + fg(160, 170, 195) + footer_plain,
+        lines.push_back(pad_line(bg(theme_.bar) + " " + fg(theme_.muted) + footer_plain,
                                  w) +
                         RESET);
 
@@ -442,20 +547,19 @@ private:
 
     void build_sidebar(std::vector<std::string>& side, int sw, const Stats& stats) {
         auto add = [&](const std::string& line) { side.push_back(pad_line(line, sw)); };
-        add(std::string(C_PANEL) + " " + fg(139, 147, 167) + "今日 " + fg(124, 156, 255) +
-            std::to_string(stats.today) + "　　" + fg(139, 147, 167) + "逾期 " +
-            fg(stats.overdue ? 248 : 139, stats.overdue ? 113 : 147,
-               stats.overdue ? 113 : 167) + std::to_string(stats.overdue));
-        add(std::string(C_PANEL) + " " + fg(139, 147, 167) + "待办 " + fg(230, 233, 239) +
-            std::to_string(stats.pending) + "　　" + fg(139, 147, 167) + "完成 " +
-            fg(74, 222, 128) + std::to_string(stats.rate) + "%");
-        std::string search_line = std::string(C_PANEL) + " " + fg(90, 100, 125) + "/ " +
+        add(bg(theme_.panel) + " " + fg(theme_.muted) + "今日 " + fg(theme_.primary) +
+            std::to_string(stats.today) + "　　" + fg(theme_.muted) + "逾期 " +
+            fg(stats.overdue ? theme_.error : theme_.muted) + std::to_string(stats.overdue));
+        add(bg(theme_.panel) + " " + fg(theme_.muted) + "待办 " + fg(theme_.text) +
+            std::to_string(stats.pending) + "　　" + fg(theme_.muted) + "完成 " +
+            fg(theme_.success) + std::to_string(stats.rate) + "%");
+        std::string search_line = bg(theme_.panel) + " " + fg(theme_.dim) + "/ " +
                                   (search_.empty() ? "搜索标题、标签、正文…"
-                                                   : fg(196, 181, 253) + "搜索：" + search_);
+                                                   : fg(theme_.violet) + "搜索：" + search_);
         add(search_line);
-        add(std::string(C_PANEL) + " " + fg(124, 156, 255) + "◈ " + mode_name() +
-            fg(90, 100, 125) + "  共 " + std::to_string(visible_.size()) + " 条");
-        add(std::string(C_PANEL));
+        add(bg(theme_.panel) + " " + fg(theme_.primary) + "◈ " + mode_name() +
+            fg(theme_.dim) + "  共 " + std::to_string(visible_.size()) + " 条");
+        add(bg(theme_.panel));
 
         int idx = current_index();
         int rows = std::max(1, (console_.height() - 2 - 6 - 2) / 2);
@@ -466,56 +570,60 @@ private:
         scroll_ = std::max(0, std::min(scroll_, std::max(0, (int)visible_.size() - 1)));
 
         if (visible_.empty()) {
-            add(std::string(C_PANEL) + " " + fg(90, 100, 125) + "没有符合条件的记事");
+            add(bg(theme_.panel) + " " + fg(theme_.dim) + "没有符合条件的记事");
         }
         for (int i = scroll_; i < (int)visible_.size() && i < scroll_ + rows; ++i) {
             Event* e = visible_[(size_t)i];
             bool sel = (i == idx);
-            const char* row_bg = sel ? C_CARD : C_PANEL;
+            std::string row_bg = sel ? bg(theme_.card) : bg(theme_.panel);
             std::string mark = e->done ? "✔" : "◻";
-            const char* mark_color =
-                e->done ? "\x1b[38;2;74;222;128m" : "\x1b[38;2;107;116;136m";
+            std::string mark_color =
+                e->done ? fg(theme_.success) : fg(theme_.dim);
             std::string title_color =
-                e->done ? fg(86, 96, 122) : (sel ? fg(255, 255, 255) : fg(230, 233, 239));
+                e->done ? fg(theme_.dim) : (sel ? fg(theme_.white) : fg(theme_.text));
             std::string line1 = std::string(row_bg) + " " + mark_color + mark + " " +
                                 title_color + truncate_display(e->title, sw - 10) +
-                                " " + fg(124, 156, 255) + "P" + std::to_string(e->priority);
+                                " " + fg(theme_.primary) + "P" + std::to_string(e->priority);
             add(line1);
             std::string due_color;
-            if (e->done) due_color = fg(86, 96, 122);
-            else if (e->is_overdue()) due_color = fg(248, 113, 113);
-            else if (e->is_due_today()) due_color = fg(251, 191, 36);
-            else due_color = fg(139, 147, 167);
+            if (e->done) due_color = fg(theme_.dim);
+            else if (e->is_overdue()) due_color = fg(theme_.error);
+            else if (e->is_due_today()) due_color = fg(theme_.warning);
+            else due_color = fg(theme_.muted);
             std::string line2 = std::string(row_bg) + "   " + due_color + humanize_due(e->due);
             for (size_t t = 0; t < e->tags.size() && t < 2; ++t) {
-                line2 += " " + fg(167, 139, 250) + "#" + truncate_display(e->tags[t], 8);
+                line2 += " " + fg(theme_.violet) + "#" + truncate_display(e->tags[t], 8);
             }
             if (!e->attachments.empty()) {
-                line2 += " " + fg(45, 212, 191) + "⧉" + std::to_string(e->attachments.size());
+                line2 += " " + fg(theme_.teal) + "⧉" + std::to_string(e->attachments.size());
             }
             add(line2);
         }
-        while ((int)side.size() < console_.height() - 4) add(std::string(C_PANEL));
-        add(std::string(C_PANEL) + " " + fg(86, 96, 122) +
-            "↑↓ 选择  Space 勾选  a 新增  ? 帮助");
-        add(std::string(C_PANEL));
-        while ((int)side.size() < console_.height() - 2) add(std::string(C_PANEL));
+        while ((int)side.size() < console_.height() - 4) add(bg(theme_.panel));
+        if (theme_.show_hint) {
+            add(bg(theme_.panel) + " " + fg(theme_.dim) +
+                "↑↓ 选择  Space 勾选  a 新增  ? 帮助");
+        } else {
+            add(bg(theme_.panel));
+        }
+        add(bg(theme_.panel));
+        while ((int)side.size() < console_.height() - 2) add(bg(theme_.panel));
     }
 
     void build_detail(std::vector<std::string>& detail, int dw, int body_h) {
         auto add = [&](const std::string& line) { detail.push_back(pad_line(line, dw)); };
         Event* e = current();
         if (!e) {
-            add(std::string(C_DETAIL) + " " + fg(90, 100, 125) + "未选择记事");
-            add(std::string(C_DETAIL));
-            add(std::string(C_DETAIL) + " " + fg(139, 147, 167) +
+            add(bg(theme_.detail) + " " + fg(theme_.dim) + "未选择记事");
+            add(bg(theme_.detail));
+            add(bg(theme_.detail) + " " + fg(theme_.muted) +
                 "按 a 新建，或从左侧选择一条记事。");
-            while ((int)detail.size() < body_h) add(std::string(C_DETAIL));
+            while ((int)detail.size() < body_h) add(bg(theme_.detail));
             return;
         }
         std::string mark = e->done ? "✔" : "○";
-        std::string title_color = e->done ? fg(74, 222, 128) : fg(255, 255, 255);
-        add(std::string(C_DETAIL) + " " + title_color + mark + " " + fg(240, 242, 248) +
+        std::string title_color = e->done ? fg(theme_.success) : fg(theme_.white);
+        add(bg(theme_.detail) + " " + title_color + mark + " " + fg(theme_.text) +
             truncate_display(e->title, dw - 6));
         std::string meta_plain = "P" + std::to_string(e->priority) + "  ·  " +
                                  humanize_due(e->due);
@@ -531,38 +639,38 @@ private:
         if (e->remind_before) {
             meta_plain += "  ·  提前" + std::to_string(e->remind_before) + "分";
         }
-        add(std::string(C_DETAIL) + " " + fg(139, 147, 167) +
+        add(bg(theme_.detail) + " " + fg(theme_.muted) +
             truncate_display(meta_plain, dw - 3));
-        std::string sep = std::string(C_DETAIL) + " " + fg(42, 49, 66);
+        std::string sep = bg(theme_.detail) + " " + fg(theme_.border);
         for (int i = 0; i < dw - 2; ++i) sep += "─";
         add(sep);
 
         if (!toast_.empty()) {
-            add(std::string(C_DETAIL) + " " + fg(251, 191, 36) +
+            add(bg(theme_.detail) + " " + fg(theme_.warning) +
                 truncate_display(toast_, dw - 3));
-            add(std::string(C_DETAIL));
+            add(bg(theme_.detail));
         }
         int remaining = body_h - (int)detail.size() - 2;
         if (e->note.empty()) {
-            add(std::string(C_DETAIL) + " " + fg(90, 100, 125) + "暂无备注，按 e 编辑");
+            add(bg(theme_.detail) + " " + fg(theme_.dim) + "暂无备注，按 e 编辑");
         } else {
             for (const auto& raw : split(e->note, '\n')) {
                 std::string text = raw;
                 std::string prefix;
-                std::string color = fg(196, 201, 214);
+                std::string color = fg(theme_.note_text);
                 if (text.rfind("### ", 0) == 0) {
                     text = text.substr(4);
-                    color = fg(230, 233, 239);
+                    color = fg(theme_.text);
                 } else if (text.rfind("## ", 0) == 0) {
                     text = text.substr(3);
-                    color = fg(230, 233, 239);
+                    color = fg(theme_.text);
                 } else if (text.rfind("# ", 0) == 0) {
                     text = text.substr(2);
-                    color = fg(230, 233, 239);
+                    color = fg(theme_.text);
                 } else if (text.rfind("- [x] ", 0) == 0) {
                     text = text.substr(6);
                     prefix = "☑ ";
-                    color = fg(139, 147, 167);
+                    color = fg(theme_.muted);
                 } else if (text.rfind("- [ ] ", 0) == 0) {
                     text = text.substr(6);
                     prefix = "☐ ";
@@ -572,28 +680,28 @@ private:
                 } else if (text.rfind("> ", 0) == 0) {
                     text = text.substr(2);
                     prefix = "│ ";
-                    color = fg(139, 147, 167);
+                    color = fg(theme_.muted);
                 }
                 auto wrapped = wrap_display(prefix + text, dw - 4);
                 for (const auto& line : wrapped) {
                     if (remaining-- <= 0) break;
-                    add(std::string(C_DETAIL) + "  " + color + line);
+                    add(bg(theme_.detail) + "  " + color + line);
                 }
                 if (remaining <= 0) break;
             }
         }
         if (!e->attachments.empty()) {
-            add(std::string(C_DETAIL));
+            add(bg(theme_.detail));
             for (const auto& att : e->attachments) {
                 bool exists = repo_.store.attachment_exists(att);
-                add(std::string(C_DETAIL) + " " + fg(45, 212, 191) + "⧉ " +
-                    truncate_display(att.name, std::max(8, dw - 30)) + fg(90, 100, 125) +
+                add(bg(theme_.detail) + " " + fg(theme_.teal) + "⧉ " +
+                    truncate_display(att.name, std::max(8, dw - 30)) + fg(theme_.dim) +
                     "  " + human_size(att.size) +
-                    (exists ? "" : fg(248, 113, 113) + " 文件丢失"));
+                    (exists ? "" : fg(theme_.error) + " 文件丢失"));
                 if ((int)detail.size() >= body_h - 1) break;
             }
         }
-        while ((int)detail.size() < body_h) add(std::string(C_DETAIL));
+        while ((int)detail.size() < body_h) add(bg(theme_.detail));
     }
 
     void draw_help() {
@@ -625,7 +733,7 @@ private:
             std::string line;
             if (i < (int)text.size()) {
                 int pad = (w - display_width(text[(size_t)i])) / 2;
-                line = std::string((size_t)std::max(0, pad), ' ') + fg(230, 233, 239) +
+                line = std::string((size_t)std::max(0, pad), ' ') + fg(theme_.text) +
                        text[(size_t)i];
             }
             out += line + "\x1b[K\r\n";
@@ -681,6 +789,12 @@ private:
                 case 'E': do_export(); return false;
                 case 'I': do_import(); return false;
                 case '?': draw_help(); return false;
+                case 'T':
+                    theme_ = load_tui_theme(repo_.store.dir);
+                    ringtone_ = repo_.store.load_config().value("ringtone", std::string(""));
+                    console_.set_font(theme_.font_face, theme_.font_size);
+                    toast("TUI 主题已重新加载");
+                    return false;
                 case 'r':
                     repo_.reload();
                     refresh_visible(true);

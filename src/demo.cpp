@@ -116,7 +116,7 @@ int seed_demo(Repository& repo) {
     const int NONE = std::numeric_limits<int>::min();
     std::vector<Item> items = {
         {"提交《电子记事本》课程设计报告",
-         "## 交付清单\n- [x] 核心功能：增删改查 + 优先级顺延\n- [x] TUI 与 C++ GUI\n- [ ] 把开发日志附在报告后面\n\n> 提醒：导出 .mjnote 并拷到 U 盘",
+         "## 交付清单\n- [x] 核心功能：增删改查 + 优先级顺延\n- [x] TUI 与 C++ GUI\n- [ ] 把开发日志附在报告后面\n\n| 模块 | 状态 |\n| --- | --- |\n| TUI | 完成 |\n| Qt GUI | 完成 |\n\n**重点**：++下划线++ ~~删除线~~ {color:#e11d48}彩色文字{/color}\n\n> 提醒：导出 .mjnote 并拷到 U 盘",
          18 * 3600, {"课程", "截止"}, 60, "#5b8def"},
         {"复习《数据结构》链表章节",
          "重点：单链表插入/删除的指针操作，以及“插入后优先级顺延”的实现。",
@@ -145,6 +145,10 @@ int seed_demo(Repository& repo) {
     }
     if (ids.size() > 6) {
         repo.set_done(ids[6], true);
+    }
+    const char* demo_icons[] = {"★", "✎", "●", "☎"};
+    for (size_t i = 0; i < ids.size() && i < 4; ++i) {
+        repo.set_visual(ids[i], std::nullopt, demo_icons[i], std::nullopt);
     }
     // 生成演示附件
     fs::path tmp_cover = repo.store.dir / "moji-cover.bmp";

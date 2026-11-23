@@ -96,6 +96,10 @@ void test_repository() {
         CHECK_EQ(repo.find(aid)->title, "第一件事（改）");
         CHECK_EQ(repo.find(aid)->tags.size(), (size_t)2);
         CHECK(repo.find(aid)->due.has_value());
+        repo.set_visual(aid, "#ff0055", "â", "{\"text\":{\"x\":1}}");
+        CHECK_EQ(repo.find(aid)->color, "#ff0055");
+        CHECK_EQ(repo.find(aid)->icon, "â");
+        CHECK(!repo.find(aid)->page_layout.empty());
         repo.set_done(bid, true);
         CHECK(repo.find(bid)->done);
         repo.move_by(cid, -1);
@@ -108,6 +112,9 @@ void test_repository() {
         Repository again(dir);
         CHECK_EQ(again.events.size(), (size_t)3);
         CHECK_EQ(again.events.at(1)->title, "插队");
+        CHECK_EQ(again.find(aid)->icon, "â");
+        CHECK_EQ(again.find(aid)->color, "#ff0055");
+        CHECK(!again.find(aid)->page_layout.empty());
         // 查询
         CHECK_EQ(again.pending().size(), (size_t)2);
         CHECK_EQ(again.finished().size(), (size_t)1);

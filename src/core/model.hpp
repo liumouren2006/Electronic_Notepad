@@ -42,6 +42,8 @@ struct Event {
     int remind_before = 0;
     std::optional<std::time_t> last_reminded_at;
     std::string color;
+    std::string icon;        // 自定义图标（emoji/字符）
+    std::string page_layout; // OneNote 风格页面布局 + 墨迹 JSON
 
     // 导入打包文件时的临时附件数据，不参与序列化
     std::vector<std::pair<std::string, Bytes>> pending_attachments;

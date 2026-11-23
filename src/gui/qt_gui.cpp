@@ -24,6 +24,11 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
+#include <QFile>
+#include <QColorDialog>
+#include <QTabWidget>
+#include <QTextBrowser>
+#include <QSet>
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QFont>
@@ -80,6 +85,9 @@
 #include "core/model.hpp"
 #include "core/repository.hpp"
 #include "core/util.hpp"
+#include "core/sound.hpp"
+#include "gui/markdown.hpp"
+#include "gui/page_view.hpp"
 
 namespace moji {
 
@@ -113,7 +121,7 @@ struct Pal {
     QString violet, teal, toastBg, toastText, toastMuted;
 };
 
-Pal make_light() {
+Pal make_light(const QColor& accent = QColor("#4f6ef7")) {
     Pal p;
     p.bg = "#f4f6fb";
     p.surface = "#ffffff";
@@ -137,10 +145,15 @@ Pal make_light() {
     p.toastBg = "#1c2130";
     p.toastText = "#f5f7ff";
     p.toastMuted = "#b7bfd4";
+    p.primary = accent.name();
+    p.primaryHover = accent.darker(112).name();
+    p.primarySoft = QColor::fromRgbF(
+        accent.redF() * 0.10 + 0.90, accent.greenF() * 0.10 + 0.90,
+        accent.blueF() * 0.10 + 0.90).name();
     return p;
 }
 
-Pal make_dark() {
+Pal make_dark(const QColor& accent = QColor("#4f6ef7")) {
     Pal p;
     p.bg = "#0e1117";
     p.surface = "#161a23";
@@ -164,6 +177,11 @@ Pal make_dark() {
     p.toastBg = "#242a3a";
     p.toastText = "#f5f7ff";
     p.toastMuted = "#aab3c8";
+    p.primary = accent.lighter(125).name();
+    p.primaryHover = accent.lighter(145).name();
+    p.primarySoft = QColor::fromRgbF(
+        accent.redF() * 0.22 + 0.09, accent.greenF() * 0.22 + 0.10,
+        accent.blueF() * 0.22 + 0.14).name();
     return p;
 }
 
@@ -268,6 +286,10 @@ QTextEdit#NoteEdit {
     selection-color: #ffffff;
 }
 QTextEdit#NoteEdit:focus { border: 1px solid @{primary}; }
+QTabWidget#NoteTabs::pane { border: 1px solid @{border}; border-radius: 10px; background: @{input}; }
+QTabBar::tab { background: @{surfaceAlt}; color: @{muted}; padding: 6px 14px; margin-right: 2px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
+QTabBar::tab:selected { background: @{primarySoft}; color: @{primary}; font-weight: 600; }
+QTextBrowser#Preview { background: @{input}; border: 1px solid @{border}; border-radius: 10px; padding: 6px; }
 
 QFrame#Card { background: @{surface}; border: 1px solid @{border}; border-radius: 14px; }
 QFrame#Card:hover { background: @{surfaceHover}; border: 1px solid @{primary}; }
@@ -404,7 +426,8 @@ private:
 // ---------------------------------------------------------------- 事件卡片
 class EventCard : public QFrame {
 public:
-    EventCard(const Event& event, const Pal& pal, std::function<void()> on_click,
+    EventCard(const Event& event, const Pal& pal,
+              std::function<void(Qt::KeyboardModifiers)> on_click,
               std::function<void()> on_toggle, std::function<void()> on_double,
               QWidget* parent = nullptr)
         : QFrame(parent),
@@ -430,7 +453,7 @@ public:
 
 protected:
     void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton && on_click_) on_click_();
+        if (e->button() == Qt::LeftButton && on_click_) on_click_(e->modifiers());
         QFrame::mousePressEvent(e);
     }
     void mouseDoubleClickEvent(QMouseEvent* e) override {
@@ -468,7 +491,8 @@ private:
         auto* body = new QVBoxLayout();
         body->setSpacing(5);
         body->setContentsMargins(0, 0, 0, 0);
-        auto* title = new ElidedLabel(qs(e.title), this);
+        QString title_text = (e.icon.empty() ? QString() : qs(e.icon) + " ") + qs(e.title);
+        auto* title = new ElidedLabel(title_text, this);
         QFont tf = title->font();
         tf.setPointSizeF(10.8);
         tf.setBold(true);
@@ -522,7 +546,7 @@ private:
 
     Event event_;
     Pal pal_;
-    std::function<void()> on_click_;
+    std::function<void(Qt::KeyboardModifiers)> on_click_;
     std::function<void()> on_toggle_;
     std::function<void()> on_double_;
 };
@@ -891,7 +915,10 @@ public:
         : repo_(repo), shot_mode_(shot_mode) {
         cfg_ = repo_.store.load_config();
         theme_ = QString::fromStdString(cfg_.value("theme", std::string("light")));
-        pal_ = theme_ == "dark" ? make_dark() : make_light();
+        accent_ = QColor(QString::fromStdString(cfg_.value("accent", std::string("#4f6ef7"))));
+        if (!accent_.isValid()) accent_ = QColor("#4f6ef7");
+        ringtone_ = QString::fromStdString(cfg_.value("ringtone", std::string("")));
+        pal_ = theme_ == "dark" ? make_dark(accent_) : make_light(accent_);
         build_ui();
         build_menus();
         apply_theme(theme_, false);
@@ -933,7 +960,24 @@ public:
         if (!repo_.events.empty()) {
             Event* first = &*repo_.events.begin();
             current_id_ = qs(first->id);
+            selection_.clear();
+            selection_.insert(current_id_);
+            anchor_id_ = current_id_;
             load_editor(first);
+            apply_card_selection();
+            update_batch_buttons();
+        }
+    }
+
+    // 自动化测试/截图用：模拟 Ctrl（或 Ctrl+Shift）连选
+    void select_test_multiple(int count, bool shift) {
+        auto events = visible_events();
+        if (events.size() < 2) return;
+        count = std::min<int>(count, (int)events.size());
+        select_event(events[0]->id, Qt::NoModifier);
+        for (int i = 1; i < count; ++i) {
+            select_event(events[i]->id,
+                         shift ? (Qt::ShiftModifier | Qt::ControlModifier) : Qt::ControlModifier);
         }
     }
 
@@ -1139,9 +1183,24 @@ private:
         connect(search_edit_, &QLineEdit::textChanged, this, [this] { search_timer_->start(); });
         layout->addWidget(search_edit_);
 
+        auto* count_row = new QHBoxLayout();
         count_label_ = new QLabel("共 0 条", panel);
         count_label_->setProperty("role", "muted");
-        layout->addWidget(count_label_);
+        count_row->addWidget(count_label_);
+        count_row->addStretch(1);
+        batch_done_button_ = new QPushButton("完成选中", panel);
+        batch_done_button_->setObjectName("Ghost");
+        batch_done_button_->setStyleSheet("font-size:9pt;");
+        batch_done_button_->setVisible(false);
+        batch_delete_button_ = new QPushButton("删除选中", panel);
+        batch_delete_button_->setObjectName("Danger");
+        batch_delete_button_->setStyleSheet("font-size:9pt;");
+        batch_delete_button_->setVisible(false);
+        connect(batch_done_button_, &QPushButton::clicked, this, [this] { batch_done(); });
+        connect(batch_delete_button_, &QPushButton::clicked, this, [this] { batch_delete(); });
+        count_row->addWidget(batch_done_button_);
+        count_row->addWidget(batch_delete_button_);
+        layout->addLayout(count_row);
 
         cards_scroll_ = new QScrollArea(panel);
         cards_scroll_->setWidgetResizable(true);
@@ -1184,6 +1243,36 @@ private:
         meta_label_->setProperty("role", "muted");
         layout->addWidget(meta_label_);
 
+        auto* look_row = new QHBoxLayout();
+        look_row->setSpacing(6);
+        auto* look_label = new QLabel("外观", panel);
+        look_label->setProperty("role", "muted");
+        color_button_ = new QPushButton(panel);
+        color_button_->setFixedSize(24, 24);
+        color_button_->setCursor(Qt::PointingHandCursor);
+        color_button_->setToolTip("事项色条颜色");
+        connect(color_button_, &QPushButton::clicked, this, [this] { choose_color(); });
+        auto* icon_label = new QLabel("图标", panel);
+        icon_label->setProperty("role", "muted");
+        icon_edit_ = new QLineEdit(panel);
+        icon_edit_->setFixedWidth(110);
+        icon_edit_->setPlaceholderText("emoji / 字符");
+        connect(icon_edit_, &QLineEdit::textEdited, this, [this](const QString& text) {
+            current_icon_ = text;
+            schedule_save();
+        });
+        connect(icon_edit_, &QLineEdit::editingFinished, this, [this] {
+            current_icon_ = icon_edit_->text();
+            save_current();
+        });
+        look_row->addWidget(look_label);
+        look_row->addWidget(color_button_);
+        look_row->addSpacing(8);
+        look_row->addWidget(icon_label);
+        look_row->addWidget(icon_edit_);
+        look_row->addStretch(1);
+        layout->addLayout(look_row);
+
         auto* due_row = new QHBoxLayout();
         due_check_ = new QCheckBox("截止", panel);
         due_edit_ = new QDateTimeEdit(panel);
@@ -1209,11 +1298,24 @@ private:
         due_row->addWidget(remind_spin_);
         layout->addLayout(due_row);
 
+        auto* tags_row = new QHBoxLayout();
         tags_edit_ = new QLineEdit(panel);
         tags_edit_->setPlaceholderText("标签：课程, 截止（逗号分隔）");
         connect(tags_edit_, &QLineEdit::textEdited, this, [this] { schedule_save(); });
         connect(tags_edit_, &QLineEdit::editingFinished, this, [this] { save_current(); });
-        layout->addWidget(tags_edit_);
+        tags_row->addWidget(tags_edit_, 1);
+        auto* priority_label = new QLabel("优先级", panel);
+        priority_label->setProperty("role", "muted");
+        priority_spin_ = new QSpinBox(panel);
+        priority_spin_->setRange(1, 999);
+        priority_spin_->setPrefix("P");
+        priority_spin_->setFixedWidth(72);
+        priority_spin_->setToolTip("直接输入目标优先级；原位置及之后自动顺延");
+        connect(priority_spin_, qOverload<int>(&QSpinBox::valueChanged), this,
+                [this](int value) { move_to_priority(value); });
+        tags_row->addWidget(priority_label);
+        tags_row->addWidget(priority_spin_);
+        layout->addLayout(tags_row);
 
         auto* toolbar = new QHBoxLayout();
         toolbar->setSpacing(6);
@@ -1265,10 +1367,13 @@ private:
         table->setObjectName("Ghost");
         table->setStyleSheet("font-size:9pt;");
         connect(table, &QPushButton::clicked, this, [this] { insert_table(); });
-        auto* sketch = new QPushButton("手绘", panel);
+        auto* sketch = new QPushButton("墨迹页", panel);
         sketch->setObjectName("Ghost");
         sketch->setStyleSheet("font-size:9pt;");
-        connect(sketch, &QPushButton::clicked, this, [this] { open_sketch(); });
+        connect(sketch, &QPushButton::clicked, this, [this] {
+            if (note_tabs_) note_tabs_->setCurrentIndex(2);
+            if (page_) page_->set_ink_mode(true);
+        });
         note_header->addWidget(note_title);
         note_header->addWidget(note_hint);
         note_header->addStretch(1);
@@ -1276,12 +1381,93 @@ private:
         note_header->addWidget(sketch);
         layout->addLayout(note_header);
 
-        note_edit_ = new NoteEdit(panel);
-        note_edit_->setPlaceholderText("写点什么…");
-        connect(note_edit_, &QTextEdit::textChanged, this, [this] { schedule_save(); });
+        note_tabs_ = new QTabWidget(panel);
+        note_tabs_->setObjectName("NoteTabs");
+        auto* edit_tab = new QWidget(note_tabs_);
+        auto* edit_layout = new QVBoxLayout(edit_tab);
+        edit_layout->setContentsMargins(0, 0, 0, 0);
+        edit_layout->setSpacing(4);
+
+        auto* fmt = new QHBoxLayout();
+        fmt->setSpacing(4);
+        auto add_fmt = [&](const QString& label, const QString& prefix,
+                           const QString& suffix, const QString& tip) {
+            auto* b = new QPushButton(label, edit_tab);
+            b->setObjectName("IconButton");
+            b->setToolTip(tip);
+            b->setStyleSheet("font-size:10pt;");
+            connect(b, &QPushButton::clicked, this, [this, prefix, suffix] {
+                wrap_note(prefix, suffix);
+            });
+            fmt->addWidget(b);
+        };
+        add_fmt("B", "**", "**", "粗体");
+        add_fmt("I", "*", "*", "斜体");
+        add_fmt("U", "++", "++", "下划线");
+        add_fmt("S", "~~", "~~", "删除线");
+        auto* color_btn = new QPushButton("颜色", edit_tab);
+        color_btn->setObjectName("Ghost");
+        color_btn->setStyleSheet("font-size:9pt;");
+        connect(color_btn, &QPushButton::clicked, this, [this] { wrap_note_color(); });
+        fmt->addWidget(color_btn);
+        auto* table_btn = new QPushButton("表格", edit_tab);
+        table_btn->setObjectName("Ghost");
+        table_btn->setStyleSheet("font-size:9pt;");
+        connect(table_btn, &QPushButton::clicked, this, [this] { insert_table(); });
+        fmt->addWidget(table_btn);
+        fmt->addStretch(1);
+        edit_layout->addLayout(fmt);
+
+        note_edit_ = new NoteEdit(edit_tab);
+        note_edit_->setPlaceholderText("写点什么… 支持 Markdown、表格、{color:#e11}彩色{/color}");
+        connect(note_edit_, &QTextEdit::textChanged, this, [this] {
+            schedule_save();
+            if (markdown_timer_) markdown_timer_->start();
+        });
         note_edit_->image_pasted = [this](const QImage& img) { attach_image(img); };
         note_edit_->files_dropped = [this](const QStringList& files) { attach_files(files); };
-        layout->addWidget(note_edit_, 1);
+        edit_layout->addWidget(note_edit_, 1);
+
+        preview_ = new QTextBrowser(note_tabs_);
+        preview_->setObjectName("Preview");
+        preview_->setOpenExternalLinks(true);
+
+        page_ = new PageEditor(repo_, note_tabs_);
+        page_->on_add_image = [this] { choose_attachments(); };
+        page_->on_layout_changed = [this](const QString& json) {
+            if (loading_ || current_id_.isEmpty()) return;
+            try {
+                repo_.set_visual(current_id_.toStdString(), std::nullopt, std::nullopt,
+                                 json.toStdString());
+            } catch (...) {
+            }
+        };
+
+        note_tabs_->addTab(edit_tab, "编辑");
+        note_tabs_->addTab(preview_, "预览");
+        note_tabs_->addTab(page_, "页面");
+        connect(note_tabs_, &QTabWidget::currentChanged, this, [this](int index) {
+            if (index == 1) update_preview();
+            if (index == 2) {
+                if (Event* e = current()) page_->set_event(e);
+            }
+            if (att_panel_) att_panel_->setVisible(index != 2);
+        });
+        layout->addWidget(note_tabs_, 1);
+
+        markdown_timer_ = new QTimer(this);
+        markdown_timer_->setSingleShot(true);
+        markdown_timer_->setInterval(180);
+        connect(markdown_timer_, &QTimer::timeout, this, [this] {
+            update_preview();
+            if (page_) page_->set_note(note_edit_->toPlainText());
+        });
+
+        att_panel_ = new QWidget(panel);
+        auto* att_panel_layout = new QVBoxLayout(att_panel_);
+        att_panel_layout->setContentsMargins(0, 0, 0, 0);
+        att_panel_layout->setSpacing(4);
+        att_panel_->setMaximumHeight(170);
 
         auto* att_header = new QHBoxLayout();
         auto* att_title = new QLabel("附件", panel);
@@ -1297,7 +1483,7 @@ private:
         att_header->addWidget(att_hint);
         att_header->addStretch(1);
         att_header->addWidget(add_att);
-        layout->addLayout(att_header);
+        att_panel_layout->addLayout(att_header);
 
         att_list_ = new AttachmentList(panel);
         att_list_->files_dropped = [this](const QStringList& files) { attach_files(files); };
@@ -1308,7 +1494,8 @@ private:
         };
         connect(att_list_, &QListWidget::itemDoubleClicked, this,
                 [this](QListWidgetItem* item) { open_attachment(item); });
-        layout->addWidget(att_list_);
+        att_panel_layout->addWidget(att_list_);
+        layout->addWidget(att_panel_);
 
         status_label_ = new QLabel("", panel);
         status_label_->setProperty("role", "muted");
@@ -1393,6 +1580,11 @@ private:
             status_label_->setText("已刷新");
         });
         view->addSeparator();
+        auto* act_accent = view->addAction("主题色…");
+        connect(act_accent, &QAction::triggered, this, [this] { choose_accent(); });
+        auto* act_ring = view->addAction("选择铃声…");
+        connect(act_ring, &QAction::triggered, this, [this] { choose_ringtone(); });
+        view->addSeparator();
         auto* group = new QActionGroup(this);
         group->setExclusive(true);
         light_action_ = view->addAction("浅色主题");
@@ -1452,11 +1644,16 @@ private:
         for (Event* e : events) {
             std::string id = e->id;
             auto* card = new EventCard(*e, pal_,
-                                       [this, id] { select_event(id); },
+                                       [this, id](Qt::KeyboardModifiers mods) {
+                                           select_event(id, mods);
+                                       },
                                        [this, id] { toggle_event(id); },
-                                       [this, id] { select_event(id); note_edit_->setFocus(); },
+                                       [this, id] {
+                                           select_event(id, Qt::NoModifier);
+                                           note_edit_->setFocus();
+                                       },
                                        cards_container_);
-            card->set_selected(id == current_id_);
+            card->set_selected(selection_.contains(qs(id)));
             cards_[qs(id)] = card;
             cards_layout_->addWidget(card);
         }
@@ -1482,6 +1679,15 @@ private:
             nav_buttons_[keys[i]]->setText(nav_titles_[keys[i]] + "   " + QString::number(counts[i]));
         }
         count_label_->setText("共 " + QString::number(events.size()) + " 条 · 按优先级排序");
+        QSet<QString> visible_ids;
+        for (Event* e : events) visible_ids.insert(qs(e->id));
+        selection_.intersect(visible_ids);
+        if (selection_.isEmpty() && !events.empty()) {
+            QString keep = current_id_.isEmpty() ? qs(events.front()->id) : current_id_;
+            if (!visible_ids.contains(keep)) keep = qs(events.front()->id);
+            selection_.insert(keep);
+        }
+        update_batch_buttons();
 
         bool visible_current = false;
         for (Event* e : events) {
@@ -1557,14 +1763,24 @@ private:
         }
         remind_spin_->setValue(e->remind_before);
         tags_edit_->setText(qs(join(e->tags, ", ")));
+        current_color_ = qs(e->color);
+        current_icon_ = qs(e->icon);
+        if (icon_edit_) icon_edit_->setText(current_icon_);
+        update_color_button();
+        if (priority_spin_) {
+            priority_spin_->blockSignals(true);
+            priority_spin_->setMaximum(std::max(1, (int)repo_.events.size()));
+            priority_spin_->setValue(e->priority);
+            priority_spin_->blockSignals(false);
+        }
         update_meta(e);
         reload_attachments();
+        if (page_) page_->set_event(e);
+        update_preview();
         done_button_->setText(e->done ? "取消完成" : "标记完成");
         status_label_->setText("已保存 · " + clock_text(e->updated_at.value_or(now_time())));
         loading_ = false;
-        for (auto it = cards_.begin(); it != cards_.end(); ++it) {
-            it.value()->set_selected(it.key() == current_id_);
-        }
+        apply_card_selection();
     }
 
     void update_meta(Event* e) {
@@ -1583,11 +1799,103 @@ private:
         meta_label_->setText(meta);
     }
 
-    void select_event(const std::string& id) {
-        if (id == current_id_.toStdString()) return;
+    void select_event(const std::string& id, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QString qid = qs(id);
         flush_pending();
-        current_id_ = qs(id);
-        load_editor(repo_.find(id));
+        if ((mods & Qt::ShiftModifier) && !anchor_id_.isEmpty()) {
+            auto events = visible_events();
+            int a = -1, b = -1;
+            for (int i = 0; i < (int)events.size(); ++i) {
+                if (qs(events[i]->id) == anchor_id_) a = i;
+                if (qs(events[i]->id) == qid) b = i;
+            }
+            if (a >= 0 && b >= 0) {
+                if (!(mods & Qt::ControlModifier)) selection_.clear();
+                for (int i = std::min(a, b); i <= std::max(a, b); ++i) {
+                    selection_.insert(qs(events[i]->id));
+                }
+            } else {
+                selection_.clear();
+                selection_.insert(qid);
+                anchor_id_ = qid;
+            }
+        } else if (mods & Qt::ControlModifier) {
+            if (selection_.contains(qid)) {
+                selection_.remove(qid);
+            } else {
+                selection_.insert(qid);
+            }
+            if (selection_.isEmpty()) selection_.insert(qid);
+            anchor_id_ = qid;
+        } else {
+            selection_.clear();
+            selection_.insert(qid);
+            anchor_id_ = qid;
+        }
+        if (!selection_.contains(qid)) {
+            qid = *selection_.begin();
+        }
+        current_id_ = qid;
+        load_editor(repo_.find(qid.toStdString()));
+        apply_card_selection();
+        update_batch_buttons();
+    }
+
+    void apply_card_selection() {
+        for (auto it = cards_.begin(); it != cards_.end(); ++it) {
+            it.value()->set_selected(selection_.contains(it.key()));
+        }
+    }
+
+    void update_batch_buttons() {
+        const bool multi = selection_.size() > 1;
+        if (batch_done_button_) {
+            batch_done_button_->setVisible(multi);
+            batch_done_button_->setText("完成选中 (" + QString::number(selection_.size()) + ")");
+        }
+        if (batch_delete_button_) {
+            batch_delete_button_->setVisible(multi);
+            batch_delete_button_->setText("删除选中 (" + QString::number(selection_.size()) + ")");
+        }
+        if (count_label_) {
+            QString base = count_label_->text().section(" · 已选", 0, 0);
+            if (multi) base += " · 已选 " + QString::number(selection_.size());
+            count_label_->setText(base);
+        }
+    }
+
+    void batch_done() {
+        if (selection_.size() < 2) return;
+        flush_pending();
+        int count = 0;
+        for (const QString& id : selection_) {
+            try {
+                repo_.set_done(id.toStdString(), true);
+                ++count;
+            } catch (...) {
+            }
+        }
+        refresh_list(false);
+        apply_card_selection();
+        if (toast_) toast_->show_message("批量完成", QString::number(count) + " 条", "✓", 2500);
+    }
+
+    void batch_delete() {
+        if (selection_.size() < 2) return;
+        auto answer = QMessageBox::question(
+            this, "删除选中记事",
+            "确定删除选中的 " + QString::number(selection_.size()) + " 条记事？",
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) return;
+        flush_pending();
+        QStringList ids(selection_.begin(), selection_.end());
+        for (const QString& id : ids) repo_.remove(id.toStdString());
+        selection_.clear();
+        current_id_.clear();
+        refresh_list(true);
+        apply_card_selection();
+        update_batch_buttons();
+        if (toast_) toast_->show_message("已删除", QString::number(ids.size()) + " 条", "🗑", 2500);
     }
 
     void schedule_save() {
@@ -1628,7 +1936,8 @@ private:
         try {
             repo_.update(current_id_.toStdString(), title.toStdString(),
                          note_edit_->toPlainText().toStdString(), due, tags,
-                         remind_spin_->value());
+                         remind_spin_->value(), current_color_.toStdString(),
+                         current_icon_.toStdString());
         } catch (const std::exception& ex) {
             status_label_->setText(QString("保存失败：") + ex.what());
             return false;
@@ -1642,6 +1951,98 @@ private:
             toast_->show_message("已保存", qs(title.toStdString()), "✓", 2200);
         }
         return true;
+    }
+
+    void update_color_button() {
+        if (!color_button_) return;
+        QString color = current_color_.isEmpty() ? pal_.primary : current_color_;
+        color_button_->setStyleSheet(
+            QString("background:%1;border:1px solid %2;border-radius:12px;")
+                .arg(color, pal_.border));
+    }
+
+    void choose_color() {
+        QColor initial(current_color_.isEmpty() ? pal_.primary : current_color_);
+        QColor chosen = QColorDialog::getColor(initial, this, "事项颜色");
+        if (!chosen.isValid()) return;
+        current_color_ = chosen.name();
+        update_color_button();
+        save_current(true);
+    }
+
+    void move_to_priority(int value) {
+        if (loading_ || current_id_.isEmpty()) return;
+        Event* e = current();
+        if (!e || value == e->priority) return;
+        flush_pending();
+        try {
+            repo_.move_to(current_id_.toStdString(), value);
+            refresh_list(false);
+            if (Event* moved = repo_.find(current_id_.toStdString())) {
+                load_editor(moved);
+                status_label_->setText("优先级 → P" + QString::number(moved->priority));
+            }
+        } catch (const std::exception& ex) {
+            status_label_->setText(QString("调整失败：") + ex.what());
+        }
+    }
+
+    void update_preview() {
+        if (!preview_) return;
+        preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), theme_ == "dark"));
+    }
+
+    void wrap_note(const QString& prefix, const QString& suffix) {
+        if (!note_edit_) return;
+        QTextCursor cursor = note_edit_->textCursor();
+        QString selected = cursor.selectedText();
+        selected.replace(QChar::ParagraphSeparator, '\n');
+        if (selected.isEmpty()) selected = "文本";
+        cursor.insertText(prefix + selected + suffix);
+        note_edit_->setTextCursor(cursor);
+        schedule_save();
+        if (markdown_timer_) markdown_timer_->start();
+    }
+
+    void wrap_note_color() {
+        QColor chosen = QColorDialog::getColor(QColor("#e11d48"), this, "文字颜色");
+        if (!chosen.isValid()) return;
+        wrap_note("{color:" + chosen.name() + "}", "{/color}");
+    }
+
+    void play_alert() {
+        if (!ringtone_.isEmpty() && QFileInfo::exists(ringtone_) &&
+            play_ringtone(ringtone_.toStdString())) {
+            return;
+        }
+        QApplication::beep();
+    }
+
+    void choose_ringtone() {
+        QString path = QFileDialog::getOpenFileName(
+            this, "选择提醒铃声（WAV）", ringtone_,
+            "WAV 音频 (*.wav);;所有文件 (*.*)");
+        if (path.isEmpty()) return;
+        ringtone_ = path;
+        json cfg = repo_.store.load_config();
+        cfg["ringtone"] = ringtone_.toStdString();
+        repo_.store.save_config(cfg);
+        if (!play_ringtone(ringtone_.toStdString())) {
+            toast_->show_message("铃声播放失败", "当前仅支持 WAV；将回退为系统蜂鸣", "🔔", 5000);
+        } else {
+            toast_->show_message("已设置铃声", QFileInfo(path).fileName(), "🔔", 3000);
+        }
+    }
+
+    void choose_accent() {
+        QColor chosen = QColorDialog::getColor(accent_, this, "主题色");
+        if (!chosen.isValid()) return;
+        accent_ = chosen;
+        json cfg = repo_.store.load_config();
+        cfg["accent"] = accent_.name().toStdString();
+        repo_.store.save_config(cfg);
+        apply_theme(theme_, false);
+        if (toast_) toast_->show_message("主题色已更新", accent_.name(), "🎨", 2000);
     }
 
     Event* current() {
@@ -1660,6 +2061,9 @@ private:
         try {
             Event& e = repo_.add("新记事");
             current_id_ = qs(e.id);
+            selection_.clear();
+            selection_.insert(current_id_);
+            anchor_id_ = current_id_;
             refresh_list(false);
             load_editor(&e);
             title_edit_->setFocus();
@@ -1781,6 +2185,7 @@ private:
         if (added) {
             reload_attachments();
             refresh_list(false);
+            if (page_ && current()) page_->refresh_images(current());
             status_label_->setText("已添加 " + QString::number(added) + " 个附件");
         }
     }
@@ -1796,6 +2201,7 @@ private:
             repo_.add_attachment(current_id_.toStdString(), tmp);
             reload_attachments();
             refresh_list(false);
+            if (page_ && current()) page_->refresh_images(current());
             status_label_->setText("图片已存为附件");
         } catch (const std::exception& ex) {
             status_label_->setText(QString("粘贴失败：") + ex.what());
@@ -1858,6 +2264,7 @@ private:
             repo_.remove_attachment(current_id_.toStdString(), index);
             reload_attachments();
             refresh_list(false);
+            if (page_ && current()) page_->refresh_images(current());
             status_label_->setText("已移除附件");
         } catch (const std::exception& ex) {
             status_label_->setText(QString("移除失败：") + ex.what());
@@ -1941,13 +2348,19 @@ private:
     // ---------- 主题 / 提醒 ----------
     void apply_theme(const QString& name, bool save) {
         theme_ = name == "dark" ? "dark" : "light";
-        pal_ = theme_ == "dark" ? make_dark() : make_light();
+        pal_ = theme_ == "dark" ? make_dark(accent_) : make_light(accent_);
         qApp->setStyleSheet(build_qss(pal_));
         if (light_action_) light_action_->setChecked(theme_ == "light");
         if (dark_action_) dark_action_->setChecked(theme_ == "dark");
         if (theme_button_) theme_button_->setText(theme_ == "dark" ? "浅色主题" : "深色主题");
         refresh_list(false);
         if (Event* e = current()) load_editor(e);
+        update_color_button();
+        if (preview_) update_preview();
+        if (page_ && current()) {
+            page_->set_event(current());
+            page_->set_note(note_edit_->toPlainText());
+        }
         if (save) {
             json cfg = repo_.store.load_config();
             cfg["theme"] = theme_.toStdString();
@@ -1962,7 +2375,7 @@ private:
             if (!e->done) ++pending;
         }
         if (pending > 0) {
-            QApplication::beep();
+            play_alert();
             if (toast_) toast_->show_message("今日安排", "今天有 " + QString::number(pending) + " 项待办", "📅", 6000);
         }
     }
@@ -1970,7 +2383,7 @@ private:
     void check_reminders() {
         auto due = repo_.due_reminders(now_time());
         if (due.empty()) return;
-        QApplication::beep();
+        play_alert();
         QString text;
         for (size_t i = 0; i < due.size() && i < 5; ++i) {
             if (i) text += "\n";
@@ -2008,6 +2421,10 @@ private:
     Repository& repo_;
     json cfg_;
     QString theme_ = "light";
+    QColor accent_ = QColor("#4f6ef7");
+    QString ringtone_;
+    QString current_color_;
+    QString current_icon_;
     Pal pal_;
     bool shot_mode_ = false;
     bool loading_ = false;
@@ -2016,6 +2433,8 @@ private:
     QString mode_ = "all";
     QString tag_filter_;
     QString current_id_;
+    QString anchor_id_;
+    QSet<QString> selection_;
     QHash<QString, EventCard*> cards_;
     QHash<QString, QPushButton*> nav_buttons_;
     QHash<QString, QString> nav_titles_;
@@ -2025,6 +2444,8 @@ private:
     QWidget* cards_container_ = nullptr;
     QVBoxLayout* cards_layout_ = nullptr;
     QLabel* count_label_ = nullptr;
+    QPushButton* batch_done_button_ = nullptr;
+    QPushButton* batch_delete_button_ = nullptr;
     QLineEdit* search_edit_ = nullptr;
     QStackedWidget* editor_stack_ = nullptr;
     QLineEdit* title_edit_ = nullptr;
@@ -2035,7 +2456,15 @@ private:
     QLineEdit* tags_edit_ = nullptr;
     QPushButton* done_button_ = nullptr;
     NoteEdit* note_edit_ = nullptr;
+    QTabWidget* note_tabs_ = nullptr;
+    QTextBrowser* preview_ = nullptr;
+    PageEditor* page_ = nullptr;
+    QTimer* markdown_timer_ = nullptr;
+    QSpinBox* priority_spin_ = nullptr;
+    QPushButton* color_button_ = nullptr;
+    QLineEdit* icon_edit_ = nullptr;
     AttachmentList* att_list_ = nullptr;
+    QWidget* att_panel_ = nullptr;
     QLabel* status_label_ = nullptr;
     StatCard* stat_today_ = nullptr;
     StatCard* stat_pending_ = nullptr;
@@ -2083,6 +2512,14 @@ int run_qt_gui(int argc, char** argv) {
         Repository repo(dir);
         MainWindow window(repo, !screenshot.isEmpty());
         window.load_first();
+        const int multi = qEnvironmentVariableIntValue("MOJI_GUI_MULTI");
+        if (multi > 1) window.select_test_multiple(multi, qEnvironmentVariableIsSet("MOJI_GUI_SHIFT"));
+        const QString tab = qEnvironmentVariable("MOJI_GUI_TAB");
+        if (!tab.isEmpty()) {
+            if (auto* tabs = window.findChild<QTabWidget*>("NoteTabs")) {
+                tabs->setCurrentIndex(tab == "preview" ? 1 : (tab == "page" ? 2 : 0));
+            }
+        }
         if (!screenshot.isEmpty()) {
             window.setAttribute(Qt::WA_DontShowOnScreen, true);
         }

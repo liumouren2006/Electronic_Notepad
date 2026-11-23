@@ -17,10 +17,10 @@ if errorlevel 1 (
 if not exist build mkdir build
 
 set "CXXFLAGS=-std=c++17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -Isrc -Ithird_party"
-set "CORE=src\core\util.cpp src\core\model.cpp src\core\elist.cpp src\core\store.cpp src\core\zip.cpp src\core\repository.cpp src\core\importer.cpp"
+set "CORE=src\core\util.cpp src\core\model.cpp src\core\elist.cpp src\core\store.cpp src\core\zip.cpp src\core\repository.cpp src\core\importer.cpp src\core\sound.cpp"
 
 echo === Building console moji.exe (CLI / TUI / GUI launcher) ===
-g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32
+g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
 if errorlevel 1 exit /b 1
 
 echo === Building Qt GUI moji-gui.exe ===
@@ -55,11 +55,11 @@ for %%F in ("C:\msys64\ucrt64\bin\libicudt*.dll" "C:\msys64\ucrt64\bin\libicuin*
 )
 
 echo === Building core tests ===
-g++ %CXXFLAGS% tests\test_core.cpp %CORE% -o build\test_core.exe -static -static-libgcc -static-libstdc++
+g++ %CXXFLAGS% tests\test_core.cpp %CORE% -o build\test_core.exe -static -static-libgcc -static-libstdc++ -lwinmm
 if errorlevel 1 exit /b 1
 
 echo.
 echo Done:
 echo   build\moji.exe       console / TUI / CLI / "moji gui" launcher
 echo   build\moji-gui.exe   Qt Widgets GUI (with Qt runtime beside it)
-echo   build\test_core.exe  core tests (62 checks)
+echo   build\test_core.exe  core tests (68 checks)

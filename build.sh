@@ -4,14 +4,16 @@ set -e
 cd "$(dirname "$0")"
 CXX="${CXX:-g++}"
 CXXFLAGS="-std=c++17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -Isrc -Ithird_party"
-CORE="src/core/util.cpp src/core/model.cpp src/core/elist.cpp src/core/store.cpp src/core/zip.cpp src/core/repository.cpp src/core/importer.cpp"
+CORE="src/core/util.cpp src/core/model.cpp src/core/elist.cpp src/core/store.cpp src/core/zip.cpp src/core/repository.cpp src/core/importer.cpp src/core/sound.cpp"
 mkdir -p build
+WINLIBS=""
 
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
+        WINLIBS="-lwinmm"
         echo "=== 编译 moji.exe（CLI / TUI / GUI 启动器） ==="
         # shellcheck disable=SC2086
-        "$CXX" $CXXFLAGS src/main.cpp src/demo.cpp src/tui/tui.cpp src/gui/launcher.cpp $CORE -o build/moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32
+        "$CXX" $CXXFLAGS src/main.cpp src/demo.cpp src/tui/tui.cpp src/gui/launcher.cpp $CORE -o build/moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
 
         echo "=== 编译 Qt GUI moji-gui.exe ==="
         mkdir -p build/qt-build
@@ -41,5 +43,5 @@ esac
 
 echo "=== 编译核心测试 ==="
 # shellcheck disable=SC2086
-"$CXX" $CXXFLAGS tests/test_core.cpp $CORE -o build/test_core
+"$CXX" $CXXFLAGS tests/test_core.cpp $CORE -o build/test_core $WINLIBS
 echo "完成，产物在 build/"

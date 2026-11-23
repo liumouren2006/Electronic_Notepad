@@ -89,7 +89,9 @@ Event& Repository::add(const std::string& title, const std::string& note,
 Event& Repository::update(const std::string& id, const std::string& title,
                           const std::string& note, std::optional<std::time_t> due,
                           std::vector<std::string> tags, int remind_before,
-                          std::optional<std::string> color) {
+                          std::optional<std::string> color,
+                          std::optional<std::string> icon,
+                          std::optional<std::string> page_layout) {
     Event& e = require(id);
     std::string clean = trim(title);
     if (clean.empty()) {
@@ -104,8 +106,28 @@ Event& Repository::update(const std::string& id, const std::string& title,
     if (color.has_value()) {
         e.color = *color;
     }
+    if (icon.has_value()) {
+        e.icon = *icon;
+    }
+    if (page_layout.has_value()) {
+        e.page_layout = *page_layout;
+    }
     e.updated_at = now_time();
     e.last_reminded_at.reset();
+    save();
+    return e;
+}
+
+Event& Repository::set_visual(const std::string& id,
+                              std::optional<std::string> color,
+                              std::optional<std::string> icon,
+                              std::optional<std::string> page_layout) {
+    Event& e = require(id);
+    push_undo();
+    if (color.has_value()) e.color = *color;
+    if (icon.has_value()) e.icon = *icon;
+    if (page_layout.has_value()) e.page_layout = *page_layout;
+    e.updated_at = now_time();
     save();
     return e;
 }

@@ -220,6 +220,8 @@ json Store::load_config() const {
     cfg["remind_interval_sec"] = 30;
     cfg["keep_backups"] = 20;
     cfg["window"] = json{{"w", 1280}, {"h", 820}};
+    cfg["ringtone"] = "";
+    cfg["accent"] = "#4f6ef7";
     bool ok = false;
     std::string text = read_file(config_path, &ok);
     if (ok && !trim(text).empty()) {

@@ -1,0 +1,24 @@
+{
+  "sidebar_width": 44,
+  "show_hint": true,
+  "font_face": "Consolas",
+  "font_size": 18,
+  "colors": {
+    "bg": "#0b0e14",
+    "panel": "#0d111c",
+    "detail": "#0b0e14",
+    "bar": "#0f1320",
+    "card": "#1b2438",
+    "text": "#e6e9ef",
+    "muted": "#8b93a7",
+    "dim": "#56607a",
+    "primary": "#7c9cff",
+    "success": "#4ade80",
+    "warning": "#fbbf24",
+    "error": "#f87171",
+    "violet": "#a78bfa",
+    "teal": "#2dd4bf",
+    "border": "#2a3142",
+    "note": "#c4c9d6"
+  }
+}
