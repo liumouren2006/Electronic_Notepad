@@ -32,7 +32,7 @@ RTXUI 是 FTXUI 作者的新项目，用 HTML 写结构、CSS 写布局，支持
 
 ```powershell
 cd D:\程序设计\moji-note
-python -m pip install cmake ninja
+.\.venv\Scripts\python.exe -m pip install cmake ninja
 .\rtxui_poc\fetch_rtxui.ps1
 # GitHub 直连失败时，先给 git 配代理，例如：
 #   git config --global http.proxy http://127.0.0.1:7890
