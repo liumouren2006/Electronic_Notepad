@@ -423,6 +423,18 @@ moji
 
 ---
 
+## RTXUI TUI PoC（独立分支）
+
+用 C++23 的 [RTXUI](https://github.com/ArthurSonzogni/RTXUI) 写的实验版 TUI，位于独立分支 **`feature/rtxui-tui`**（tag `rtxui-poc-v0.1`），不修改当前 `src/tui`，也不进入正式便携包。
+
+- 源码：`rtxui_poc/`（分支上）
+- 可直接运行的静态 exe：`D:\程序设计\moji-rtxui-poc\moji-rtxui.exe`
+- 已实现：三栏布局、搜索/筛选、Markdown 详情、新增/编辑 dialog、完成/删除、附件、帮助、撤销/重做
+- 构建方式见 `rtxui_poc/README.md`；中文路径下必须用 CMake + Ninja，不能用 MinGW Makefiles
+- 调研结论：[`docs/TUI框架调研.md`](docs/TUI框架调研.md)
+
+切到 PoC 分支：`git switch feature/rtxui-tui`。
+
 ## 已知限制
 
 - GUI 使用 **Qt6 Widgets**，本身跨平台；本机只验证了 Windows。Linux 下 `build.sh` 目前构建核心 + 菜单式 TUI/CLI，Qt GUI 需要自行用 qmake 构建（代码没有 Windows 专属依赖）。

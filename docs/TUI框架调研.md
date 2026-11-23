@@ -40,7 +40,21 @@ FTXUI/TermOx 能实现“类似控件”，但没有同一套 CSS/Textual 组件
 
 这样既保留当前工程“纯 C++、无新依赖、Windows 可直接构建”的优点，又把与 Python 版差异最大的编辑表单补上。
 
-## 4. 如果以后用 RTXUI 重写
+## 4. RTXUI PoC（本分支已实现）
+
+已在独立分支 `feature/rtxui-tui` 中把 RTXUI 接进来，代码在 `rtxui_poc/`，复用 `src/core`，不改现有 `src/tui`。CMake + Ninja 构建，Windows/MinGW GCC 15.2 通过；可执行文件静态链接，干净 PATH 下可运行。
+
+构建（中文路径必须用 Ninja，`MinGW Makefiles` 的 `mingw32-make` 会因 CreateProcess 乱码失败）：
+
+```powershell
+python -m pip install cmake ninja
+.\rtxui_poc\fetch_rtxui.ps1
+$env:PATH = "$PWD\.venv\Scripts;C:\msys64\ucrt64\bin;$env:PATH"
+cmake -S rtxui_poc -B rtxui_poc\build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build rtxui_poc\build --target moji-rtxui -j4
+```
+
+已实现：三栏布局、搜索、筛选、Markdown 详情、新增/编辑 dialog、完成/删除确认、附件弹窗、帮助、撤销/重做、鼠标/Tab。详细见 `rtxui_poc/README.md`。
 
 RTXUI 是更值得尝试的路线：
 
@@ -56,11 +70,12 @@ RTXUI 是更值得尝试的路线：
 
 风险：RTXUI 是 C++23 新库，构建链从 g++ 单命令变成 CMake；旧 TUI 的坐标/键盘/ConPTY 测试全部要重写；最终是“用 HTML/CSS 写一个类似 Textual 的界面”，不是直接复用 Textual 的颜色/布局。
 
-## 5. 本轮选择
+## 5. 最终取舍
 
-- 不在主工程中引入 RTXUI，避免在没有充分验证前破坏当前可构建、可打包的 C++ TUI；
-- 用现有渲染器补齐模态表单、帮助、搜索、表格、附件弹窗；
-- 把 RTXUI 作为下一阶段的独立 PoC 分支。
+- 正式 `master` 仍保留 Win32 Console + ANSI TUI，保证 `build.bat` / `package.ps1` 无新依赖、可直接打包；
+- RTXUI PoC 放在独立分支 `feature/rtxui-tui`，构建产物在 `D:\程序设计\moji-rtxui-poc\`，不参与正式包；
+- 在 RTXUI 分支上验证了“C++ 也能用 HTML/CSS 写出接近 Textual 的三栏 + dialog + Markdown 界面”；
+- 后续若要把 RTXUI 变成正式 TUI，需要补齐主题 JSON、导入导出、提醒、标签筛选，并决定是否接受 C++23/CMake 依赖。
 
 ## 参考
 
