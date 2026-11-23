@@ -82,6 +82,7 @@ json Event::to_json() const {
                 {"created_at", time_str(created_at)},
                 {"updated_at", time_str(updated_at)},
                 {"remind_before", remind_before},
+                {"system_notify", system_notify},
                 {"last_reminded_at", time_str(last_reminded_at)},
                 {"color", color},
                 {"icon", icon},
@@ -128,6 +129,7 @@ Event Event::from_json(const json& j) {
         e.updated_at = e.created_at;
     }
     e.remind_before = std::max(0, j.value("remind_before", 0));
+    e.system_notify = j.value("system_notify", false);
     e.last_reminded_at = opt_time(j, "last_reminded_at");
     e.color = j.value("color", "");
     e.icon = j.value("icon", "");

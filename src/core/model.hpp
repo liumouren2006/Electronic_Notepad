@@ -40,6 +40,7 @@ struct Event {
     std::optional<std::time_t> created_at;
     std::optional<std::time_t> updated_at;
     int remind_before = 0;
+    bool system_notify = false;  // 提醒时同时发 Windows 系统通知
     std::optional<std::time_t> last_reminded_at;
     std::string color;
     std::string icon;        // 自定义图标（emoji/字符）

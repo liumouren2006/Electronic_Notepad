@@ -1,5 +1,6 @@
 #include "page_view.hpp"
 
+#include <QButtonGroup>
 #include <QColorDialog>
 #include <QFileInfo>
 #include <QGraphicsItem>
@@ -316,6 +317,8 @@ protected:
 
 class PageEditor::Impl {
 public:
+    enum class Tool { Select, Ink, Eraser };
+
     Impl(PageEditor* owner, Repository& repo) : owner_(owner), repo_(repo) {
         scene_ = new QGraphicsScene(owner);
         scene_->setBackgroundBrush(QColor("#ffffff"));
@@ -324,60 +327,84 @@ public:
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(6);
 
-        auto* toolbar = new QHBoxLayout();
-        toolbar->setSpacing(6);
+        toolbar_bar_ = new QWidget(owner);
+        auto* toolbar_all = new QVBoxLayout(toolbar_bar_);
+        toolbar_all->setContentsMargins(0, 0, 0, 0);
+        toolbar_all->setSpacing(4);
+
+        auto* tools = new QHBoxLayout();
+        tools->setSpacing(6);
+        select_button_ = new QPushButton("选择", owner);
+        select_button_->setCheckable(true);
+        select_button_->setChecked(true);
+        select_button_->setToolTip("浏览页面：拖动文字/图片、调整图层");
         ink_button_ = new QPushButton("墨迹", owner);
         ink_button_->setCheckable(true);
-        ink_button_->setToolTip("打开后可在页面上直接书写");
-        auto* eraser = new QPushButton("橡皮", owner);
-        eraser->setCheckable(true);
-        eraser->setToolTip("点击/拖动擦除墨迹");
+        ink_button_->setToolTip("在页面上直接书写");
+        eraser_button_ = new QPushButton("橡皮", owner);
+        eraser_button_->setCheckable(true);
+        eraser_button_->setToolTip("点击或拖动擦除墨迹");
+        tool_group_ = new QButtonGroup(owner);
+        tool_group_->setExclusive(true);
+        tool_group_->addButton(select_button_, (int)Tool::Select);
+        tool_group_->addButton(ink_button_, (int)Tool::Ink);
+        tool_group_->addButton(eraser_button_, (int)Tool::Eraser);
+        for (QPushButton* b : {select_button_, ink_button_, eraser_button_}) {
+            b->setObjectName("ToolButton");
+            b->setCursor(Qt::PointingHandCursor);
+        }
         pen_button_ = new QPushButton(owner);
-        pen_button_->setFixedSize(24, 24);
+        pen_button_->setObjectName("ToolButton");
+        pen_button_->setFixedSize(30, 30);
+        pen_button_->setCursor(Qt::PointingHandCursor);
         pen_button_->setToolTip("墨迹颜色");
         width_spin_ = new QSpinBox(owner);
         width_spin_->setRange(1, 20);
         width_spin_->setValue(4);
-        width_spin_->setFixedWidth(60);
+        width_spin_->setFixedWidth(62);
+        width_spin_->setToolTip("墨迹粗细");
         auto* undo_ink = new QPushButton("撤销", owner);
         auto* clear_ink = new QPushButton("清空", owner);
-        auto* add_image = new QPushButton("加图", owner);
+        for (QPushButton* b : {undo_ink, clear_ink}) {
+            b->setObjectName("ToolButton");
+            b->setCursor(Qt::PointingHandCursor);
+        }
+        tools->addWidget(select_button_);
+        tools->addWidget(ink_button_);
+        tools->addWidget(eraser_button_);
+        tools->addWidget(pen_button_);
+        tools->addWidget(width_spin_);
+        tools->addWidget(undo_ink);
+        tools->addWidget(clear_ink);
+        tools->addStretch(1);
+        toolbar_all->addLayout(tools);
+
+        auto* actions = new QHBoxLayout();
+        actions->setSpacing(6);
+        auto* add_image = new QPushButton("＋ 加图", owner);
         auto* front = new QPushButton("置顶", owner);
         auto* back = new QPushButton("置底", owner);
         auto* remove_image = new QPushButton("删图", owner);
-        for (QPushButton* b : {ink_button_, eraser, undo_ink, clear_ink, add_image, front, back,
-                               remove_image}) {
-            b->setObjectName("Ghost");
-            b->setStyleSheet("font-size:9pt;padding:2px 6px;");
+        for (QPushButton* b : {add_image, front, back, remove_image}) {
+            b->setObjectName("ToolButton");
             b->setCursor(Qt::PointingHandCursor);
         }
-        toolbar->addWidget(ink_button_);
-        toolbar->addWidget(eraser);
-        toolbar->addWidget(pen_button_);
-        toolbar->addWidget(width_spin_);
-        toolbar->addWidget(undo_ink);
-        toolbar->addWidget(clear_ink);
-        toolbar->addStretch(1);
-        toolbar->addWidget(add_image);
-        toolbar->addWidget(front);
-        toolbar->addWidget(back);
-        toolbar->addWidget(remove_image);
-        layout->addLayout(toolbar);
+        actions->addStretch(1);
+        actions->addWidget(add_image);
+        actions->addWidget(front);
+        actions->addWidget(back);
+        actions->addWidget(remove_image);
+        toolbar_all->addLayout(actions);
+        layout->addWidget(toolbar_bar_);
         view_->setMinimumHeight(220);
         layout->addWidget(view_, 1);
 
         set_pen_color(QColor("#1f2430"));
-        connect(ink_button_, &QPushButton::toggled, owner, [this](bool on) {
-            set_ink_mode(on);
-        });
-        connect(eraser, &QPushButton::toggled, owner, [this, eraser](bool on) {
-            eraser_ = on;
-            if (on) {
-                ink_button_->setChecked(true);
-                set_ink_mode(true);
-            }
-            view_->setCursor(on ? Qt::CrossCursor : (ink_mode_ ? Qt::CrossCursor : Qt::ArrowCursor));
-        });
+        connect(select_button_, &QPushButton::clicked, owner,
+                [this] { set_tool(Tool::Select); });
+        connect(ink_button_, &QPushButton::clicked, owner, [this] { set_tool(Tool::Ink); });
+        connect(eraser_button_, &QPushButton::clicked, owner,
+                [this] { set_tool(Tool::Eraser); });
         connect(pen_button_, &QPushButton::clicked, owner, [this] {
             QColor c = QColorDialog::getColor(pen_color_, owner_, "墨迹颜色");
             if (c.isValid()) set_pen_color(c);
@@ -408,12 +435,12 @@ public:
         save_timer_->setInterval(450);
         connect(save_timer_, &QTimer::timeout, owner, [this] { save_layout(); });
         connect(scene_, &QGraphicsScene::changed, owner, [this](const QList<QRectF>&) {
-            if (!loading_) save_timer_->start();
+            if (!loading_ && !read_only_) save_timer_->start();
         });
 
         view_->on_press = [this](QPointF p, Qt::KeyboardModifiers) -> bool {
-            if (!ink_mode_ || !ink_) return false;
-            if (eraser_) {
+            if (read_only_ || tool_ == Tool::Select || !ink_) return false;
+            if (tool_ == Tool::Eraser) {
                 if (ink_->erase_at(p)) schedule_save();
                 return true;
             }
@@ -422,8 +449,8 @@ public:
             return true;
         };
         view_->on_move = [this](QPointF p, Qt::KeyboardModifiers) -> bool {
-            if (!ink_mode_ || !ink_) return false;
-            if (eraser_) {
+            if (read_only_ || tool_ == Tool::Select || !ink_) return false;
+            if (tool_ == Tool::Eraser) {
                 if (ink_->erase_at(p)) schedule_save();
                 return true;
             }
@@ -448,13 +475,41 @@ public:
         if (owner_->on_layout_changed || text_) update_text();
     }
 
-    void set_ink_mode(bool on) {
-        ink_mode_ = on;
-        if (ink_button_ && ink_button_->isChecked() != on) ink_button_->setChecked(on);
-        view_->setCursor(on ? Qt::CrossCursor : Qt::ArrowCursor);
+    void set_tool(Tool tool) {
+        tool_ = tool;
+        if (select_button_) select_button_->setChecked(tool == Tool::Select);
+        if (ink_button_) ink_button_->setChecked(tool == Tool::Ink);
+        if (eraser_button_) eraser_button_->setChecked(tool == Tool::Eraser);
+        if (read_only_) {
+            view_->setCursor(Qt::ArrowCursor);
+        } else {
+            view_->setCursor(tool == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+            if (tool != Tool::Select) view_->setFocus();
+        }
     }
 
-    bool ink_mode() const { return ink_mode_; }
+    void set_ink_mode(bool on) { set_tool(on ? Tool::Ink : Tool::Select); }
+
+    bool ink_mode() const { return tool_ == Tool::Ink; }
+
+    void set_read_only(bool on) {
+        read_only_ = on;
+        if (toolbar_bar_) toolbar_bar_->setVisible(!on);
+        if (on) set_tool(Tool::Select);
+        apply_interactive();
+        view_->setCursor(Qt::ArrowCursor);
+    }
+
+    void apply_interactive() {
+        if (text_) {
+            text_->setFlag(QGraphicsItem::ItemIsMovable, !read_only_);
+            text_->setFlag(QGraphicsItem::ItemIsSelectable, !read_only_);
+        }
+        for (auto* item : images_) {
+            item->setFlag(QGraphicsItem::ItemIsMovable, !read_only_);
+            item->setFlag(QGraphicsItem::ItemIsSelectable, !read_only_);
+        }
+    }
 
     void set_event(Event* event) {
         loading_ = true;
@@ -543,6 +598,7 @@ public:
             ++index;
         }
         update_scene_rect();
+        apply_interactive();
         loading_ = false;
     }
 
@@ -595,6 +651,7 @@ public:
             ++index;
         }
         update_scene_rect();
+        apply_interactive();
         loading_ = false;
     }
 
@@ -672,14 +729,18 @@ private:
     PageTextItem* text_ = nullptr;
     InkLayer* ink_ = nullptr;
     QVector<PageImageItem*> images_;
+    QWidget* toolbar_bar_ = nullptr;
+    QButtonGroup* tool_group_ = nullptr;
+    QPushButton* select_button_ = nullptr;
     QPushButton* ink_button_ = nullptr;
+    QPushButton* eraser_button_ = nullptr;
     QPushButton* pen_button_ = nullptr;
     QSpinBox* width_spin_ = nullptr;
     QTimer* save_timer_ = nullptr;
     QColor pen_color_ = QColor("#1f2430");
     qreal pen_width_ = 4;
-    bool ink_mode_ = false;
-    bool eraser_ = false;
+    Tool tool_ = Tool::Select;
+    bool read_only_ = false;
     bool drawing_ = false;
     bool loading_ = false;
     bool dark_ = false;
@@ -697,6 +758,7 @@ PageEditor::~PageEditor() { delete impl_; }
 void PageEditor::set_event(Event* event) { impl_->set_event(event); }
 void PageEditor::set_note(const QString& markdown) { impl_->set_note(markdown); }
 void PageEditor::set_dark(bool dark) { impl_->set_dark(dark); }
+void PageEditor::set_read_only(bool read_only) { impl_->set_read_only(read_only); }
 void PageEditor::set_ink_mode(bool enabled) { impl_->set_ink_mode(enabled); }
 bool PageEditor::ink_mode() const { return impl_->ink_mode(); }
 void PageEditor::refresh_images(Event* event) { impl_->refresh_images(event); }

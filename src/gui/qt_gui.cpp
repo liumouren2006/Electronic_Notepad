@@ -3,6 +3,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QAbstractItemView>
 #include <QAbstractAnimation>
 #include <QCloseEvent>
 #include <QContextMenuEvent>
@@ -66,6 +67,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
+#include <QSystemTrayIcon>
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QTimer>
@@ -250,6 +252,18 @@ QPushButton#TagChip:hover { color: @{text}; background: @{surfaceHover}; }
 QPushButton#TagChip:checked { background: @{primarySoft}; color: @{primary}; border: 1px solid @{primary}; }
 QPushButton#IconButton { background: transparent; border: none; border-radius: 9px; padding: 6px 9px; font-size: 12pt; }
 QPushButton#IconButton:hover { background: @{surfaceHover}; }
+QPushButton#ToolButton {
+    background: @{surfaceAlt};
+    color: @{text};
+    border: 1px solid @{border};
+    border-radius: 9px;
+    padding: 5px 10px;
+    font-size: 9.5pt;
+    font-weight: 500;
+}
+QPushButton#ToolButton:hover { background: @{surfaceHover}; border-color: @{primary}; }
+QPushButton#ToolButton:pressed { background: @{primarySoft}; }
+QPushButton#ToolButton:checked { background: @{primary}; color: #ffffff; border-color: @{primary}; font-weight: 700; }
 
 QLineEdit, QDateTimeEdit, QSpinBox {
     background: @{input};
@@ -290,6 +304,9 @@ QTabWidget#NoteTabs::pane { border: 1px solid @{border}; border-radius: 10px; ba
 QTabBar::tab { background: @{surfaceAlt}; color: @{muted}; padding: 6px 14px; margin-right: 2px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
 QTabBar::tab:selected { background: @{primarySoft}; color: @{primary}; font-weight: 600; }
 QTextBrowser#Preview { background: @{input}; border: 1px solid @{border}; border-radius: 10px; padding: 6px; }
+QLabel#ViewTitle { font-size: 22px; font-weight: 700; color: @{text}; }
+QLabel#ViewMeta { color: @{muted}; font-size: 10pt; }
+QLabel#ViewSection { color: @{muted}; font-size: 9pt; font-weight: 700; }
 
 QFrame#Card { background: @{surface}; border: 1px solid @{border}; border-radius: 14px; }
 QFrame#Card:hover { background: @{surfaceHover}; border: 1px solid @{primary}; }
@@ -924,6 +941,7 @@ public:
         apply_theme(theme_, false);
         refresh_list(true);
         toast_ = new Toast(this);
+        if (!shot_mode_) setup_tray();
 
         save_timer_ = new QTimer(this);
         save_timer_->setSingleShot(true);
@@ -957,17 +975,35 @@ public:
     }
 
     void load_first() {
-        if (!repo_.events.empty()) {
-            Event* first = &*repo_.events.begin();
-            current_id_ = qs(first->id);
-            selection_.clear();
-            selection_.insert(current_id_);
-            anchor_id_ = current_id_;
-            load_editor(first);
-            apply_card_selection();
-            update_batch_buttons();
-        }
+        // 启动时只显示卡片列表，不预读任何卡片内容；点击卡片后才展开页面。
+        apply_card_selection();
+        update_batch_buttons();
     }
+
+    // 自动化测试/截图用
+    void debug_set_mode(const QString& mode) {
+        mode_ = mode;
+        tag_filter_.clear();
+        if (nav_buttons_.contains(mode)) nav_buttons_[mode]->setChecked(true);
+        refresh_list(true);
+    }
+
+    void debug_click_first() {
+        auto events = visible_events();
+        if (!events.empty()) select_event(events.front()->id, Qt::NoModifier);
+    }
+
+    void debug_open_first(bool edit) {
+        auto events = visible_events();
+        if (events.empty()) return;
+        current_id_ = qs(events.front()->id);
+        selection_.clear();
+        selection_.insert(current_id_);
+        anchor_id_ = current_id_;
+        load_event(events.front(), edit);
+    }
+
+    void debug_close_detail() { close_detail(); }
 
     // 自动化测试/截图用：模拟 Ctrl（或 Ctrl+Shift）连选
     void select_test_multiple(int count, bool shift) {
@@ -1219,10 +1255,77 @@ private:
     QStackedWidget* build_editor_stack() {
         editor_stack_ = new QStackedWidget(this);
         editor_stack_->setMinimumWidth(430);
+        editor_stack_->addWidget(build_view_page());
         editor_stack_->addWidget(build_editor());
-        editor_stack_->addWidget(build_empty_page());
-        editor_stack_->setCurrentIndex(1);
+        editor_stack_->setCurrentIndex(0);
+        editor_stack_->hide();
         return editor_stack_;
+    }
+
+    QFrame* build_view_page() {
+        auto* panel = new QFrame(this);
+        view_panel_ = panel;
+        panel->setObjectName("EditorPanel");
+        auto* layout = new QVBoxLayout(panel);
+        layout->setContentsMargins(26, 20, 26, 14);
+        layout->setSpacing(10);
+
+        auto* header = new QHBoxLayout();
+        header->setSpacing(8);
+        view_title_ = new QLabel("", panel);
+        view_title_->setObjectName("ViewTitle");
+        view_title_->setWordWrap(true);
+        header->addWidget(view_title_, 1);
+        auto* edit = new QPushButton("✎ 编辑", panel);
+        edit->setObjectName("Primary");
+        edit->setCursor(Qt::PointingHandCursor);
+        edit->setToolTip("进入编辑界面");
+        connect(edit, &QPushButton::clicked, this, [this] {
+            if (Event* e = current()) load_editor(e);
+        });
+        auto* close = new QPushButton("✕", panel);
+        close->setObjectName("IconButton");
+        close->setCursor(Qt::PointingHandCursor);
+        close->setToolTip("关闭右侧页面");
+        connect(close, &QPushButton::clicked, this, [this] { close_detail(); });
+        header->addWidget(edit);
+        header->addWidget(close);
+        layout->addLayout(header);
+
+        view_meta_ = new QLabel(panel);
+        view_meta_->setObjectName("ViewMeta");
+        view_meta_->setWordWrap(true);
+        layout->addWidget(view_meta_);
+
+        view_page_ = new PageEditor(repo_, panel);
+        view_page_->set_read_only(true);
+        layout->addWidget(view_page_, 1);
+
+        view_att_panel_ = new QWidget(panel);
+        auto* att_layout = new QVBoxLayout(view_att_panel_);
+        att_layout->setContentsMargins(0, 0, 0, 0);
+        att_layout->setSpacing(4);
+        auto* att_title = new QLabel("附件", view_att_panel_);
+        att_title->setObjectName("ViewSection");
+        att_layout->addWidget(att_title);
+        view_att_list_ = new QListWidget(view_att_panel_);
+        view_att_list_->setObjectName("Attachments");
+        view_att_list_->setViewMode(QListWidget::IconMode);
+        view_att_list_->setIconSize(QSize(76, 56));
+        view_att_list_->setGridSize(QSize(104, 104));
+        view_att_list_->setResizeMode(QListWidget::Adjust);
+        view_att_list_->setMovement(QListWidget::Snap);
+        view_att_list_->setSpacing(4);
+        view_att_list_->setWordWrap(true);
+        view_att_list_->setTextElideMode(Qt::ElideRight);
+        view_att_list_->setDragDropMode(QAbstractItemView::NoDragDrop);
+        view_att_list_->setMaximumHeight(122);
+        connect(view_att_list_, &QListWidget::itemDoubleClicked, this,
+                [this](QListWidgetItem* item) { open_attachment(item); });
+        att_layout->addWidget(view_att_list_);
+        layout->addWidget(view_att_panel_);
+        view_att_panel_->hide();
+        return panel;
     }
 
     QFrame* build_editor() {
@@ -1231,6 +1334,27 @@ private:
         auto* layout = new QVBoxLayout(panel);
         layout->setContentsMargins(26, 20, 26, 14);
         layout->setSpacing(10);
+
+        auto* edit_header = new QHBoxLayout();
+        auto* edit_label = new QLabel("编辑记事", panel);
+        edit_label->setProperty("role", "h3");
+        auto* finish = new QPushButton("完成", panel);
+        finish->setObjectName("Primary");
+        finish->setCursor(Qt::PointingHandCursor);
+        finish->setToolTip("保存并返回页面视图");
+        connect(finish, &QPushButton::clicked, this, [this] {
+            if (save_current()) show_view_current();
+        });
+        auto* close = new QPushButton("✕", panel);
+        close->setObjectName("IconButton");
+        close->setCursor(Qt::PointingHandCursor);
+        close->setToolTip("关闭右侧页面");
+        connect(close, &QPushButton::clicked, this, [this] { close_detail(); });
+        edit_header->addWidget(edit_label);
+        edit_header->addStretch(1);
+        edit_header->addWidget(finish);
+        edit_header->addWidget(close);
+        layout->addLayout(edit_header);
 
         title_edit_ = new QLineEdit(panel);
         title_edit_->setObjectName("TitleEdit");
@@ -1297,6 +1421,16 @@ private:
         due_row->addWidget(due_edit_, 1);
         due_row->addWidget(remind_spin_);
         layout->addLayout(due_row);
+
+        auto* notify_row = new QHBoxLayout();
+        system_notify_check_ = new QCheckBox("提醒时使用 Windows 系统通知", panel);
+        system_notify_check_->setToolTip("开启后，到点提醒会在 Windows 通知中心弹出系统通知");
+        connect(system_notify_check_, &QCheckBox::toggled, this, [this](bool) {
+            schedule_save();
+        });
+        notify_row->addWidget(system_notify_check_);
+        notify_row->addStretch(1);
+        layout->addLayout(notify_row);
 
         auto* tags_row = new QHBoxLayout();
         tags_edit_ = new QLineEdit(panel);
@@ -1604,6 +1738,27 @@ private:
         connect(act_about, &QAction::triggered, this, [this] { show_about(); });
     }
 
+    void setup_tray() {
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
+        tray_ = new QSystemTrayIcon(windowIcon(), this);
+        tray_->setToolTip("墨记 MoJi");
+        auto* menu = new QMenu(this);
+        menu->addAction("显示主窗口", this, [this] {
+            showNormal();
+            raise();
+            activateWindow();
+        });
+        menu->addSeparator();
+        menu->addAction("退出", this, [this] { close(); });
+        tray_->setContextMenu(menu);
+        tray_->show();
+    }
+
+    void show_system_notification(const QString& title, const QString& body, int ms = 10000) {
+        if (!tray_ || !tray_->isVisible()) return;
+        tray_->showMessage(title, body, QSystemTrayIcon::Information, ms);
+    }
+
     // ---------- 数据与刷新 ----------
     std::vector<Event*> visible_events() {
         std::vector<Event*> base;
@@ -1632,7 +1787,7 @@ private:
         return out;
     }
 
-    void refresh_list(bool select_first) {
+    void refresh_list(bool /*select_first*/) {
         if (!cards_layout_) return;
         int scroll_value = cards_scroll_->verticalScrollBar()->value();
         while (QLayoutItem* item = cards_layout_->takeAt(0)) {
@@ -1650,7 +1805,11 @@ private:
                                        [this, id] { toggle_event(id); },
                                        [this, id] {
                                            select_event(id, Qt::NoModifier);
-                                           note_edit_->setFocus();
+                                           Event* e = repo_.find(id);
+                                           if (e) {
+                                               load_editor(e);
+                                               title_edit_->setFocus();
+                                           }
                                        },
                                        cards_container_);
             card->set_selected(selection_.contains(qs(id)));
@@ -1658,10 +1817,12 @@ private:
             cards_layout_->addWidget(card);
         }
         if (events.empty()) {
-            auto* empty = new QLabel("没有符合条件的记事\n点击右上角「+ 新建」开始记录", cards_container_);
+            // 逾期/已完成等分类为空时只留一句提示，不再推“新建”引导，
+            // 右侧详情分屏也保持关闭。
+            auto* empty = new QLabel("没有符合条件的记事", cards_container_);
             empty->setAlignment(Qt::AlignCenter);
             empty->setProperty("role", "muted");
-            empty->setMinimumHeight(180);
+            empty->setMinimumHeight(120);
             cards_layout_->addWidget(empty);
         }
         cards_layout_->addStretch(1);
@@ -1682,26 +1843,17 @@ private:
         QSet<QString> visible_ids;
         for (Event* e : events) visible_ids.insert(qs(e->id));
         selection_.intersect(visible_ids);
-        if (selection_.isEmpty() && !events.empty()) {
-            QString keep = current_id_.isEmpty() ? qs(events.front()->id) : current_id_;
-            if (!visible_ids.contains(keep)) keep = qs(events.front()->id);
-            selection_.insert(keep);
-        }
         update_batch_buttons();
 
         bool visible_current = false;
         for (Event* e : events) {
             if (e->id == current_id_.toStdString()) visible_current = true;
         }
-        if (select_first && !events.empty() && !visible_current) {
-            current_id_ = qs(events.front()->id);
-            load_editor(events.front());
-        } else if (events.empty()) {
+        if (events.empty() || !visible_current) {
+            // 启动、切换分类、搜索后都不自动读取卡片内容；只有用户点击才展开。
+            if (events.empty()) selection_.clear();
             current_id_.clear();
-            load_editor(nullptr);
-        } else if (!visible_current && current_id_.isEmpty()) {
-            current_id_ = qs(events.front()->id);
-            load_editor(events.front());
+            close_detail(false);
         }
         rebuild_tags();
         int id = std::max(0, std::min(scroll_value, cards_scroll_->verticalScrollBar()->maximum()));
@@ -1744,14 +1896,60 @@ private:
         tags_layout_->addStretch(1);
     }
 
-    void load_editor(Event* e) {
-        loading_ = true;
+    QString meta_for(Event* e) const {
+        if (!e) return QString();
+        QString meta = "P" + QString::number(e->priority) + "  ·  截止 " +
+                       qs(humanize_due(e->due));
+        if (e->created_at.has_value()) {
+            meta += "  ·  创建于 " + qs(date_str(*e->created_at));
+        }
+        if (!e->attachments.empty()) {
+            meta += "  ·  附件 " + QString::number(e->attachments.size());
+        }
+        if (e->system_notify) meta += "  ·  Windows 通知";
+        return meta;
+    }
+
+    void update_meta(Event* e) {
         if (!e) {
-            editor_stack_->setCurrentIndex(1);
-            loading_ = false;
+            meta_label_->clear();
             return;
         }
-        editor_stack_->setCurrentIndex(0);
+        meta_label_->setText(meta_for(e));
+    }
+
+    void fill_attachments(QListWidget* list, Event* e) {
+        if (!list) return;
+        list->clear();
+        if (!e) return;
+        QFileIconProvider provider;
+        for (const auto& att : e->attachments) {
+            fs::path absolute;
+            try {
+                absolute = repo_.store.resolve(att);
+            } catch (...) {
+            }
+            QIcon icon;
+            QPixmap px(qpath(absolute));
+            if (!px.isNull()) {
+                icon = QIcon(px.scaled(QSize(76, 56), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            } else {
+                icon = provider.icon(QFileInfo(qpath(absolute)));
+            }
+            auto* item = new QListWidgetItem(icon, qs(att.name), list);
+            item->setData(Qt::UserRole, qs(att.path));
+            item->setToolTip(qpath(absolute));
+            item->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+        }
+    }
+
+    void load_event(Event* e, bool edit) {
+        loading_ = true;
+        if (!e) {
+            loading_ = false;
+            close_detail(false);
+            return;
+        }
         title_edit_->setText(qs(e->title));
         note_edit_->setPlainText(qs(e->note));
         due_check_->setChecked(e->due.has_value());
@@ -1762,6 +1960,7 @@ private:
             due_edit_->setDateTime(QDateTime::currentDateTime().addSecs(3600));
         }
         remind_spin_->setValue(e->remind_before);
+        if (system_notify_check_) system_notify_check_->setChecked(e->system_notify);
         tags_edit_->setText(qs(join(e->tags, ", ")));
         current_color_ = qs(e->color);
         current_icon_ = qs(e->icon);
@@ -1776,27 +1975,59 @@ private:
         update_meta(e);
         reload_attachments();
         if (page_) page_->set_event(e);
+        if (view_page_) {
+            view_page_->set_dark(theme_ == "dark");
+            view_page_->set_event(e);
+        }
+        if (view_title_) view_title_->setText(qs(e->title));
+        if (view_meta_) view_meta_->setText(meta_for(e));
+        if (view_att_list_) fill_attachments(view_att_list_, e);
+        if (view_att_panel_) view_att_panel_->setVisible(!e->attachments.empty());
         update_preview();
         done_button_->setText(e->done ? "取消完成" : "标记完成");
         status_label_->setText("已保存 · " + clock_text(e->updated_at.value_or(now_time())));
+        editing_ = edit;
+        if (editor_stack_) editor_stack_->setCurrentIndex(edit ? 1 : 0);
         loading_ = false;
+        show_detail();
         apply_card_selection();
     }
 
-    void update_meta(Event* e) {
-        if (!e) {
-            meta_label_->clear();
-            return;
+    void load_editor(Event* e) { load_event(e, true); }
+    void load_view(Event* e) { load_event(e, false); }
+
+    void show_view_current() {
+        if (Event* e = current()) load_view(e);
+    }
+
+    void apply_detail_sizes() {
+        if (!splitter_ || !editor_stack_ || !detail_visible_) return;
+        QList<int> sizes = splitter_->sizes();
+        if (sizes.size() == 2 && sizes[1] > 300) detail_width_ = sizes[1];
+        int total = std::max(700, splitter_->width());
+        // 中间列表至少保留约 480px，详情最多 760px，避免卡片被挤得太窄。
+        int right = std::max(430, std::min(760, std::min(detail_width_, total - 480)));
+        splitter_->setSizes({total - right, right});
+    }
+
+    void show_detail() {
+        if (!editor_stack_) return;
+        editor_stack_->show();
+        detail_visible_ = true;
+        apply_detail_sizes();
+        // QSplitter 在子控件由隐藏变可见时会重新分配尺寸，下一轮再压一次。
+        QTimer::singleShot(0, this, [this] { apply_detail_sizes(); });
+    }
+
+    void close_detail(bool flush = true) {
+        if (flush) flush_pending();
+        if (editor_stack_) {
+            QList<int> sizes = splitter_->sizes();
+            if (sizes.size() == 2 && sizes[1] > 300) detail_width_ = sizes[1];
+            editor_stack_->hide();
         }
-        QString meta = "P" + QString::number(e->priority) + "  ·  截止 " +
-                       qs(humanize_due(e->due));
-        if (e->created_at.has_value()) {
-            meta += "  ·  创建于 " + qs(date_str(*e->created_at));
-        }
-        if (!e->attachments.empty()) {
-            meta += "  ·  附件 " + QString::number(e->attachments.size());
-        }
-        meta_label_->setText(meta);
+        detail_visible_ = false;
+        editing_ = false;
     }
 
     void select_event(const std::string& id, Qt::KeyboardModifiers mods = Qt::NoModifier) {
@@ -1836,7 +2067,12 @@ private:
             qid = *selection_.begin();
         }
         current_id_ = qid;
-        load_editor(repo_.find(qid.toStdString()));
+        if (mods == Qt::NoModifier) {
+            load_view(repo_.find(qid.toStdString()));
+        } else {
+            // Ctrl / Shift 只做多选，不自动展开右侧页面
+            close_detail(false);
+        }
         apply_card_selection();
         update_batch_buttons();
     }
@@ -1937,7 +2173,8 @@ private:
             repo_.update(current_id_.toStdString(), title.toStdString(),
                          note_edit_->toPlainText().toStdString(), due, tags,
                          remind_spin_->value(), current_color_.toStdString(),
-                         current_icon_.toStdString());
+                         current_icon_.toStdString(), std::nullopt,
+                         system_notify_check_ && system_notify_check_->isChecked());
         } catch (const std::exception& ex) {
             status_label_->setText(QString("保存失败：") + ex.what());
             return false;
@@ -2083,7 +2320,7 @@ private:
         flush_pending();
         try {
             Event& e = repo_.toggle_done(id);
-            if (id == current_id_.toStdString()) load_editor(&e);
+            if (id == current_id_.toStdString() && detail_visible_) load_event(&e, editing_);
             refresh_list(true);
             if (toast_) toast_->show_message(e.done ? "已完成" : "恢复待办", qs(e.title), e.done ? "✓" : "↺", 2200);
         } catch (const std::exception& ex) {
@@ -2354,13 +2591,16 @@ private:
         if (dark_action_) dark_action_->setChecked(theme_ == "dark");
         if (theme_button_) theme_button_->setText(theme_ == "dark" ? "浅色主题" : "深色主题");
         refresh_list(false);
-        if (Event* e = current()) load_editor(e);
+        if (detail_visible_) {
+            if (Event* e = current()) load_event(e, editing_);
+        }
         update_color_button();
         if (preview_) update_preview();
         if (page_ && current()) {
             page_->set_event(current());
             page_->set_note(note_edit_->toPlainText());
         }
+        if (view_page_) view_page_->set_dark(theme_ == "dark");
         if (save) {
             json cfg = repo_.store.load_config();
             cfg["theme"] = theme_.toStdString();
@@ -2391,6 +2631,13 @@ private:
         }
         if (due.size() > 5) text += "\n……以及另外 " + QString::number(due.size() - 5) + " 项";
         if (toast_) toast_->show_message("⏰ 待办提醒", text, "⏰", 12000);
+        int sent = 0;
+        for (Event* e : due) {
+            if (!e->system_notify || sent >= 5) continue;
+            show_system_notification("墨记提醒 · " + qs(e->title),
+                                     "截止 " + qs(humanize_due(e->due)), 12000);
+            ++sent;
+        }
         repo_.mark_reminded(due, now_time());
     }
 
@@ -2405,6 +2652,8 @@ private:
             "Ctrl+Alt+Z / Ctrl+Alt+Y　撤销 / 重做<br>"
             "Ctrl+Return　标记完成<br>"
             "F5　刷新　F1　本帮助<br><br>"
+            "点击卡片先看页面，右上角「✎ 编辑」进入修改；<br>"
+            "Ctrl/Shift 多选，页面右上角 ✕ 关闭分屏。<br><br>"
             "附件：拖入窗口或备注框；双击缩略图打开；右键移除；<br>"
             "备注 Ctrl+V 可直接粘贴剪贴板图片。");
     }
@@ -2429,6 +2678,9 @@ private:
     bool shot_mode_ = false;
     bool loading_ = false;
     bool dirty_ = false;
+    bool detail_visible_ = false;
+    bool editing_ = false;
+    int detail_width_ = 680;
 
     QString mode_ = "all";
     QString tag_filter_;
@@ -2448,8 +2700,15 @@ private:
     QPushButton* batch_delete_button_ = nullptr;
     QLineEdit* search_edit_ = nullptr;
     QStackedWidget* editor_stack_ = nullptr;
+    QFrame* view_panel_ = nullptr;
+    QLabel* view_title_ = nullptr;
+    QLabel* view_meta_ = nullptr;
+    PageEditor* view_page_ = nullptr;
+    QWidget* view_att_panel_ = nullptr;
+    QListWidget* view_att_list_ = nullptr;
     QLineEdit* title_edit_ = nullptr;
     QLabel* meta_label_ = nullptr;
+    QCheckBox* system_notify_check_ = nullptr;
     QCheckBox* due_check_ = nullptr;
     QDateTimeEdit* due_edit_ = nullptr;
     QSpinBox* remind_spin_ = nullptr;
@@ -2479,6 +2738,7 @@ private:
     QAction* light_action_ = nullptr;
     QAction* dark_action_ = nullptr;
     Toast* toast_ = nullptr;
+    QSystemTrayIcon* tray_ = nullptr;
     QTimer* save_timer_ = nullptr;
     QTimer* search_timer_ = nullptr;
     QTimer* remind_timer_ = nullptr;
@@ -2512,6 +2772,11 @@ int run_qt_gui(int argc, char** argv) {
         Repository repo(dir);
         MainWindow window(repo, !screenshot.isEmpty());
         window.load_first();
+        const QString mode = qEnvironmentVariable("MOJI_GUI_MODE");
+        if (!mode.isEmpty()) window.debug_set_mode(mode);
+        const QString open = qEnvironmentVariable("MOJI_GUI_OPEN");
+        if (!open.isEmpty()) window.debug_open_first(open == "edit");
+        if (qEnvironmentVariableIsSet("MOJI_GUI_CLICK")) window.debug_click_first();
         const int multi = qEnvironmentVariableIntValue("MOJI_GUI_MULTI");
         if (multi > 1) window.select_test_multiple(multi, qEnvironmentVariableIsSet("MOJI_GUI_SHIFT"));
         const QString tab = qEnvironmentVariable("MOJI_GUI_TAB");

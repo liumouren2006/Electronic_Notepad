@@ -92,10 +92,11 @@ void test_repository() {
         CHECK_EQ(repo.events.at(1)->title, "第一件事");
         CHECK_EQ(repo.events.at(2)->title, "插队");
         repo.update(aid, "第一件事（改）", "新备注", parse_datetime("2026-12-01 10:00"),
-                    {"课程", "重要"}, 15);
+                    {"课程", "重要"}, 15, std::nullopt, std::nullopt, std::nullopt, true);
         CHECK_EQ(repo.find(aid)->title, "第一件事（改）");
         CHECK_EQ(repo.find(aid)->tags.size(), (size_t)2);
         CHECK(repo.find(aid)->due.has_value());
+        CHECK(repo.find(aid)->system_notify);
         repo.set_visual(aid, "#ff0055", "â", "{\"text\":{\"x\":1}}");
         CHECK_EQ(repo.find(aid)->color, "#ff0055");
         CHECK_EQ(repo.find(aid)->icon, "â");
@@ -115,6 +116,7 @@ void test_repository() {
         CHECK_EQ(again.find(aid)->icon, "â");
         CHECK_EQ(again.find(aid)->color, "#ff0055");
         CHECK(!again.find(aid)->page_layout.empty());
+        CHECK(again.find(aid)->system_notify);
         // 查询
         CHECK_EQ(again.pending().size(), (size_t)2);
         CHECK_EQ(again.finished().size(), (size_t)1);

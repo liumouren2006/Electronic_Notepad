@@ -91,7 +91,8 @@ Event& Repository::update(const std::string& id, const std::string& title,
                           std::vector<std::string> tags, int remind_before,
                           std::optional<std::string> color,
                           std::optional<std::string> icon,
-                          std::optional<std::string> page_layout) {
+                          std::optional<std::string> page_layout,
+                          std::optional<bool> system_notify) {
     Event& e = require(id);
     std::string clean = trim(title);
     if (clean.empty()) {
@@ -103,6 +104,9 @@ Event& Repository::update(const std::string& id, const std::string& title,
     e.due = due;
     e.tags = tags;
     e.remind_before = std::max(0, remind_before);
+    if (system_notify.has_value()) {
+        e.system_notify = *system_notify;
+    }
     if (color.has_value()) {
         e.color = *color;
     }

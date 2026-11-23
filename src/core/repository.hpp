@@ -54,7 +54,8 @@ public:
                   std::vector<std::string> tags, int remind_before,
                   std::optional<std::string> color = std::nullopt,
                   std::optional<std::string> icon = std::nullopt,
-                  std::optional<std::string> page_layout = std::nullopt);
+                  std::optional<std::string> page_layout = std::nullopt,
+                  std::optional<bool> system_notify = std::nullopt);
     Event& set_visual(const std::string& id, std::optional<std::string> color,
                       std::optional<std::string> icon = std::nullopt,
                       std::optional<std::string> page_layout = std::nullopt);

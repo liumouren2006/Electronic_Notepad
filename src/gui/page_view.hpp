@@ -19,6 +19,7 @@ public:
     void set_event(Event* event);
     void set_note(const QString& markdown);
     void set_dark(bool dark);
+    void set_read_only(bool read_only);
     void set_ink_mode(bool enabled);
     bool ink_mode() const;
     void refresh_images(Event* event);

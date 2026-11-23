@@ -58,6 +58,73 @@ std::string pad_line(std::string line, int width) {
     return line;
 }
 
+std::string repeat_text(const std::string& text, int count) {
+    std::string out;
+    for (int i = 0; i < std::max(0, count); ++i) out += text;
+    return out;
+}
+
+bool parse_table_row(const std::string& line, std::vector<std::string>& cells) {
+    std::string s = trim(line);
+    if (s.size() < 2 || s.front() != '|') return false;
+    s.erase(s.begin());
+    if (!s.empty() && s.back() == '|') s.pop_back();
+    cells.clear();
+    std::string cur;
+    for (char c : s) {
+        if (c == '|') {
+            cells.push_back(trim(cur));
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    cells.push_back(trim(cur));
+    return !cells.empty();
+}
+
+bool table_separator(const std::vector<std::string>& cells) {
+    if (cells.empty()) return false;
+    for (const auto& cell : cells) {
+        if (cell.empty()) return false;
+        bool dash = false;
+        for (char c : cell) {
+            if (c == '-') dash = true;
+            else if (c != ':' && c != ' ') return false;
+        }
+        if (!dash) return false;
+    }
+    return true;
+}
+
+std::string strip_color_tags(std::string s) {
+    for (;;) {
+        size_t open = s.find("{color:");
+        if (open == std::string::npos) break;
+        size_t close = s.find('}', open);
+        if (close == std::string::npos) break;
+        s.erase(open, close - open + 1);
+    }
+    for (;;) {
+        size_t close = s.find("{/color}");
+        if (close == std::string::npos) break;
+        s.erase(close, 8);
+    }
+    return s;
+}
+
+std::string inline_plain(std::string s) {
+    // 去掉常见的行内标记，终端里不显示 **、++ 之类源码符号
+    for (const char* mark : {"**", "++", "~~", "=="}) {
+        std::string m = mark;
+        size_t pos = 0;
+        while ((pos = s.find(m, pos)) != std::string::npos) s.erase(pos, m.size());
+    }
+    return trim(strip_color_tags(s));
+}
+
+std::string plain_cell(std::string s) { return inline_plain(s); }
+
 struct Rgb {
     int r = 255, g = 255, b = 255;
 };
@@ -159,6 +226,7 @@ struct Key {
         Down,
         Enter,
         Escape,
+        Backspace,
         Delete,
         PageUp,
         PageDown,
@@ -323,6 +391,7 @@ public:
                 case VK_END: out.type = Key::Type::End; return out;
                 case VK_PRIOR: out.type = Key::Type::PageUp; return out;
                 case VK_NEXT: out.type = Key::Type::PageDown; return out;
+                case VK_BACK: out.type = Key::Type::Backspace; return out;
                 case VK_DELETE: out.type = Key::Type::Delete; return out;
                 case VK_ESCAPE: out.type = Key::Type::Escape; return out;
                 default: break;
@@ -384,6 +453,7 @@ private:
     std::string ringtone_;
     std::string mode_ = "all";
     std::string search_;
+    bool search_editing_ = false;
     std::string selected_id_;
     std::string toast_;
     std::time_t toast_until_ = 0;
@@ -531,7 +601,9 @@ private:
         }
 
         std::string footer_plain =
-            "↑↓ 选择　Space 勾选　a 新增　e 编辑　x 删除　[ ] 调序　t 今日　/ 搜索　E 导出　? 帮助　q 退出";
+            search_editing_
+                ? "搜索模式：直接输入　Enter 确认　Backspace 删除　Esc 清空"
+                : "↑↓ 选择　Space 勾选　a 新增　e 编辑　x 删除　[ ] 调序　t 今日　/ 搜索　E 导出　? 帮助　q 退出";
         if (display_width(footer_plain) > w - 2) {
             footer_plain = truncate_display(footer_plain, w - 2);
         }
@@ -553,16 +625,39 @@ private:
         add(bg(theme_.panel) + " " + fg(theme_.muted) + "待办 " + fg(theme_.text) +
             std::to_string(stats.pending) + "　　" + fg(theme_.muted) + "完成 " +
             fg(theme_.success) + std::to_string(stats.rate) + "%");
-        std::string search_line = bg(theme_.panel) + " " + fg(theme_.dim) + "/ " +
-                                  (search_.empty() ? "搜索标题、标签、正文…"
-                                                   : fg(theme_.violet) + "搜索：" + search_);
-        add(search_line);
+        int box_w = std::max(20, sw);
+        int box_inner = box_w - 4;
+        Rgb border_color = search_editing_ ? theme_.primary : theme_.border;
+        std::string top = bg(theme_.panel) + fg(border_color) + "╭" +
+                          repeat_text("─", box_w - 2) + "╮";
+        std::string shown;
+        std::string shown_color;
+        if (!search_.empty()) {
+            shown = "🔍 " + search_;
+            shown_color = fg(theme_.text);
+        } else {
+            shown = "🔍 搜索标题、标签、正文…";
+            shown_color = fg(theme_.dim);
+        }
+        if (search_editing_) {
+            shown += "▏";
+            shown_color = fg(theme_.text);
+        }
+        shown = truncate_display(shown, box_inner);
+        std::string mid = bg(theme_.panel) + fg(border_color) + "│ " + shown_color +
+                          pad_display(shown, box_inner) + fg(border_color) + " │";
+        std::string bottom = bg(theme_.panel) + fg(border_color) + "╰" +
+                             repeat_text("─", box_w - 2) + "╯";
+        add(top);
+        add(mid);
+        add(bottom);
         add(bg(theme_.panel) + " " + fg(theme_.primary) + "◈ " + mode_name() +
             fg(theme_.dim) + "  共 " + std::to_string(visible_.size()) + " 条");
         add(bg(theme_.panel));
 
         int idx = current_index();
-        int rows = std::max(1, (console_.height() - 2 - 6 - 2) / 2);
+        last_list_top_ = (int)side.size() + 1;
+        int rows = std::max(1, (console_.height() - 2 - last_list_top_ - 2) / 2);
         if (idx >= 0) {
             if (idx < scroll_) scroll_ = idx;
             if (idx >= scroll_ + rows) scroll_ = idx - rows + 1;
@@ -651,11 +746,85 @@ private:
             add(bg(theme_.detail));
         }
         int remaining = body_h - (int)detail.size() - 2;
+        auto render_table = [&](const std::vector<std::vector<std::string>>& rows) {
+            if (rows.empty() || remaining < 3) return;
+            size_t ncols = 1;
+            for (const auto& row : rows) ncols = std::max(ncols, row.size());
+            std::vector<int> widths(ncols, 4);
+            for (const auto& row : rows) {
+                for (size_t c = 0; c < row.size(); ++c) {
+                    widths[c] = std::max(widths[c], display_width(plain_cell(row[c])) + 2);
+                }
+            }
+            int max_width = std::max(18, dw - 4);
+            int total = (int)ncols + 1;
+            for (int w : widths) total += w;
+            while (total > max_width) {
+                size_t widest = 0;
+                for (size_t c = 1; c < widths.size(); ++c) {
+                    if (widths[c] > widths[widest]) widest = c;
+                }
+                if (widths[widest] <= 4) break;
+                --widths[widest];
+                --total;
+            }
+            auto border_line = [&](const char* left, const char* middle, const char* right) {
+                std::string s = bg(theme_.detail) + "  " + fg(theme_.border) + left;
+                for (size_t c = 0; c < widths.size(); ++c) {
+                    s += repeat_text("─", widths[c]);
+                    if (c + 1 < widths.size()) s += middle;
+                }
+                s += right;
+                return s;
+            };
+            auto emit_row = [&](const std::vector<std::string>& row, bool header) {
+                if (remaining-- <= 0) return;
+                std::string s = bg(theme_.detail) + "  " + fg(theme_.border) + "│";
+                for (size_t c = 0; c < widths.size(); ++c) {
+                    std::string cell = c < row.size() ? plain_cell(row[c]) : "";
+                    int inner = std::max(1, widths[c] - 2);
+                    s += fg(header ? theme_.white : theme_.note_text) + " " +
+                         pad_display(truncate_display(cell, inner), inner) + " " +
+                         fg(theme_.border) + "│";
+                }
+                add(s);
+            };
+            add(border_line("┌", "┬", "┐"));
+            emit_row(rows[0], true);
+            if (remaining <= 0) return;
+            add(border_line("├", "┼", "┤"));
+            for (size_t r = 1; r < rows.size() && remaining > 0; ++r) {
+                emit_row(rows[r], false);
+            }
+            if (remaining > 0) add(border_line("└", "┴", "┘"));
+        };
+
         if (e->note.empty()) {
             add(bg(theme_.detail) + " " + fg(theme_.dim) + "暂无备注，按 e 编辑");
         } else {
-            for (const auto& raw : split(e->note, '\n')) {
-                std::string text = raw;
+            auto note_lines = split(e->note, '\n');
+            for (size_t i = 0; i < note_lines.size();) {
+                std::vector<std::string> cells;
+                std::vector<std::string> next_cells;
+                if (parse_table_row(note_lines[i], cells) && i + 1 < note_lines.size() &&
+                    parse_table_row(note_lines[i + 1], next_cells) &&
+                    table_separator(next_cells)) {
+                    std::vector<std::vector<std::string>> table_rows;
+                    table_rows.push_back(cells);
+                    i += 2;
+                    while (i < note_lines.size()) {
+                        std::vector<std::string> body;
+                        if (!parse_table_row(note_lines[i], body) || table_separator(body)) break;
+                        table_rows.push_back(body);
+                        ++i;
+                    }
+                    render_table(table_rows);
+                    if (remaining <= 0) break;
+                    continue;
+                }
+
+                const std::string& raw = note_lines[i++];
+                std::string text = inline_plain(raw);
                 std::string prefix;
                 std::string color = fg(theme_.note_text);
                 if (text.rfind("### ", 0) == 0) {
@@ -704,46 +873,133 @@ private:
         while ((int)detail.size() < body_h) add(bg(theme_.detail));
     }
 
-    void draw_help() {
+    void overlay_box(const std::vector<std::string>& lines, int box_w) {
         int w = std::max(80, console_.width() - 1);
         int h = std::max(20, console_.height() - 1);
-        std::vector<std::string> text = {
-            "墨记 · TUI 快捷键",
-            "",
-            "↑ ↓        选择任务",
-            "Space / d  勾选 / 取消勾选（也支持鼠标点左侧方框）",
-            "a          新增（标题、截止、标签、提醒、位置、备注）",
-            "e          编辑选中任务",
-            "x / Del    删除（需确认）",
-            "[ / ]      提高 / 降低优先级",
-            "t / 0 / 1 / 2 / 3   今日 / 全部 / 待办 / 已完成 / 逾期",
-            "/          搜索；Esc 清空搜索",
-            "o          查看附件",
-            "Ctrl+Z/Y   撤销 / 重做",
-            "E / I      导出 / 导入",
-            "?          本帮助",
-            "q          退出",
-            "",
-            "数据目录：" + repo_.display_dir(),
-            "",
-            "按任意键返回",
-        };
-        std::string out = "\x1b[H\x1b[2J";
-        for (int i = 0; i < h; ++i) {
-            std::string line;
-            if (i < (int)text.size()) {
-                int pad = (w - display_width(text[(size_t)i])) / 2;
-                line = std::string((size_t)std::max(0, pad), ' ') + fg(theme_.text) +
-                       text[(size_t)i];
-            }
-            out += line + "\x1b[K\r\n";
+        int x = std::max(0, (w - box_w) / 2);
+        int y = std::max(0, (h - (int)lines.size()) / 2);
+        std::string out;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            int row = y + (int)i + 1;
+            // 先把整行铺成暗色再画弹窗：避免底下的宽字符跨到弹窗左边界，
+            // 也形成类似 Python 版的压暗背景。
+            out += "\x1b[" + std::to_string(row) + ";1H" + bg(theme_.bg) +
+                   std::string((size_t)w, ' ');
+            out += "\x1b[" + std::to_string(row) + ";" + std::to_string(x + 1) + "H" +
+                   pad_line(lines[i], box_w) + bg(theme_.bg);
         }
         out += RESET;
         console_.write(out);
-        console_.read_key(30000);
+    }
+
+    void draw_help() {
+        draw();
+        int w = std::max(80, console_.width() - 1);
+        int box_w = std::min(86, std::max(60, w - 12));
+        int inner = box_w - 4;
+        auto box_row = [&](const std::string& content) {
+            int cw = visible_width(content);
+            std::string s = bg(theme_.panel) + fg(theme_.border) + "│" +
+                            bg(theme_.panel) + " " + content + bg(theme_.panel) +
+                            std::string((size_t)std::max(0, inner - cw), ' ') +
+                            fg(theme_.border) + " │";
+            return s;
+        };
+        auto border_line = [&](const char* left, const char* middle, const char* right,
+                               int left_w, int right_w) {
+            return bg(theme_.panel) + fg(theme_.border) + left +
+                   repeat_text("─", left_w) + middle + repeat_text("─", right_w) + right;
+        };
+        int key_w = 22;
+        int desc_w = std::max(20, inner - key_w - 3);
+        auto table_row = [&](const std::string& key, const std::string& desc, bool header) {
+            std::string content = fg(theme_.border) + "│ " +
+                                  fg(header ? theme_.primary : theme_.warning) +
+                                  pad_display(truncate_display(key, key_w - 2), key_w - 2) +
+                                  fg(theme_.border) + " │ " +
+                                  fg(header ? theme_.primary : theme_.note_text) +
+                                  pad_display(truncate_display(desc, desc_w - 2), desc_w - 2) +
+                                  fg(theme_.border) + " │";
+            return box_row(content);
+        };
+        std::vector<std::string> box;
+        box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╭" +
+                      repeat_text("─", box_w - 2) + "╮");
+        box.push_back(box_row(fg(theme_.white) + "? 使用帮助"));
+        box.push_back(box_row(""));
+        std::string centered = "墨记 · 快捷键";
+        int left_pad = std::max(0, (inner - display_width(centered)) / 2);
+        box.push_back(box_row(std::string((size_t)left_pad, ' ') + fg(theme_.primary) +
+                              centered));
+        box.push_back(box_row(fg(theme_.primary) + "浏览"));
+        box.push_back(box_row(border_line("┌", "┬", "┐", key_w, desc_w)));
+        box.push_back(table_row("按键", "作用", true));
+        box.push_back(box_row(border_line("├", "┼", "┤", key_w, desc_w)));
+        struct HelpRow {
+            const char* key;
+            const char* desc;
+        };
+        const HelpRow rows[] = {
+            {"↑ ↓ / k j", "上下选择"},
+            {"Enter / e", "编辑选中事件"},
+            {"Space / d", "勾选 / 取消勾选"},
+            {"Delete / x", "删除（先确认）"},
+            {"[ / ]", "提高 / 降低优先级"},
+            {"t / 0 / 1 / 2 / 3", "今日 / 全部 / 待办 / 已完成 / 逾期"},
+            {"/", "搜索（输入框内直接打字）"},
+            {"o", "附件弹窗"},
+            {"Ctrl+Z / Ctrl+Y", "撤销 / 重做"},
+            {"E / I", "导出 / 导入"},
+            {"?", "本帮助"},
+            {"q", "退出"},
+        };
+        for (const auto& row : rows) box.push_back(table_row(row.key, row.desc, false));
+        box.push_back(box_row(border_line("└", "┴", "┘", key_w, desc_w)));
+        box.push_back(box_row(""));
+        std::string close = "关闭 (Esc)";
+        int close_pad = std::max(0, inner - display_width(close) - 4);
+        box.push_back(box_row(std::string((size_t)close_pad, ' ') + bg(theme_.primary) +
+                              fg(theme_.white) + " " + close + " "));
+        box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╰" +
+                      repeat_text("─", box_w - 2) + "╯");
+        overlay_box(box, box_w);
+        console_.read_key(60000);
     }
 
     bool handle(const Key& key) {
+        if (search_editing_) {
+            if (key.type == Key::Type::Escape) {
+                search_.clear();
+                search_editing_ = false;
+                refresh_visible(true);
+                toast("已清空搜索", 2);
+                return false;
+            }
+            if (key.type == Key::Type::Enter) {
+                search_ = trim(search_);
+                search_editing_ = false;
+                mode_ = "all";
+                refresh_visible(true);
+                if (!search_.empty()) toast("搜索：" + search_, 2);
+                return false;
+            }
+            if (key.type == Key::Type::Backspace) {
+                if (!search_.empty()) {
+                    size_t pos = search_.size() - 1;
+                    while (pos > 0 && ((unsigned char)search_[pos] & 0xC0) == 0x80) --pos;
+                    search_.erase(pos);
+                    refresh_visible(true);
+                }
+                return false;
+            }
+            if (key.type == Key::Type::Char && key.ch >= 32) {
+                std::wstring one(1, key.ch);
+                search_ += to_utf8(one);
+                refresh_visible(true);
+                return false;
+            }
+            return false;
+        }
         switch (key.type) {
             case Key::Type::Quit: return true;
             case Key::Type::Up: move_selection(-1); return false;
@@ -784,7 +1040,10 @@ private:
                 case '1': set_mode("pending"); return false;
                 case '2': set_mode("done"); return false;
                 case '3': set_mode("overdue"); return false;
-                case '/': do_search(); return false;
+                case '/':
+                    search_editing_ = true;
+                    toast("搜索：输入关键字，Enter 确认，Esc 清空", 3);
+                    return false;
                 case 'o': do_attachments(); return false;
                 case 'E': do_export(); return false;
                 case 'I': do_import(); return false;
@@ -815,7 +1074,7 @@ private:
 
     void handle_mouse(const Key& key) {
         if (key.x >= last_sidebar_w_ || key.y < last_list_top_) return;
-        int rows = std::max(1, (console_.height() - 2 - 6 - 2) / 2);
+        int rows = std::max(1, (console_.height() - 2 - last_list_top_ - 2) / 2);
         int rel = key.y - last_list_top_;
         int row = rel / 2;
         int idx = scroll_ + row;
@@ -977,6 +1236,55 @@ private:
         if (!search_.empty()) toast("搜索：" + search_, 2);
     }
 
+    void draw_attachment_modal(const std::string& id, int selected) {
+        draw();
+        Event* e = repo_.find(id);
+        if (!e) return;
+        int w = std::max(80, console_.width() - 1);
+        int box_w = std::min(74, std::max(52, w - 14));
+        int inner = box_w - 4;
+        auto box_row = [&](const std::string& content) {
+            int cw = visible_width(content);
+            return bg(theme_.panel) + fg(theme_.border) + "│" + bg(theme_.panel) + " " +
+                   content + bg(theme_.panel) +
+                   std::string((size_t)std::max(0, inner - cw), ' ') + fg(theme_.border) +
+                   " │";
+        };
+        std::vector<std::string> box;
+        box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╭" +
+                      repeat_text("─", box_w - 2) + "╮");
+        std::string title_plain = "📎 附件 · " + e->title;
+        std::string count_plain = "共 " + std::to_string(e->attachments.size()) +
+                                  " 个 · ↑↓ 选择 · Enter 打开 · Del 移除 · Esc 关闭";
+        box.push_back(box_row(fg(theme_.primary) +
+                              truncate_display(title_plain, inner)));
+        box.push_back(box_row(fg(theme_.dim) +
+                              truncate_display(count_plain, inner)));
+        int visible = std::min<int>(8, (int)e->attachments.size());
+        int start = std::max(0, std::min(selected - visible / 2,
+                                         (int)e->attachments.size() - visible));
+        for (int i = start; i < start + visible; ++i) {
+            const Attachment& att = e->attachments[(size_t)i];
+            std::string text = " " + att.name + "  " + human_size(att.size) + " · " +
+                               att.mime + " ";
+            text = truncate_display(text, inner);
+            if (i == selected) {
+                text = pad_display(text, inner);
+                box.push_back(box_row(bg(theme_.primary) + fg(theme_.white) + text));
+            } else {
+                box.push_back(box_row(fg(theme_.note_text) + text));
+            }
+        }
+        box.push_back(box_row(""));
+        std::string buttons = fg(theme_.muted) + "关闭" + "    " + fg(theme_.error) +
+                              "移除" + "    " + fg(theme_.primary) + "打开";
+        int pad = std::max(0, (inner - visible_width(buttons)) / 2);
+        box.push_back(box_row(std::string((size_t)pad, ' ') + buttons));
+        box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╰" +
+                      repeat_text("─", box_w - 2) + "╯");
+        overlay_box(box, box_w);
+    }
+
     void do_attachments() {
         Event* e = current();
         if (!e) return;
@@ -984,26 +1292,47 @@ private:
             toast("该记事没有附件（可在 GUI 中拖入）", 3);
             return;
         }
-        console_.begin_input();
-        std::cout << "—— 附件 ——\n";
-        for (size_t i = 0; i < e->attachments.size(); ++i) {
-            std::cout << "  " << (i + 1) << ". " << e->attachments[i].name << "  "
-                      << human_size(e->attachments[i].size) << "\n";
-        }
-        std::string choice = console_.ask("输入编号打开（回车=1）", "1");
-        console_.end_input();
-        int idx = std::atoi(choice.c_str()) - 1;
-        if (idx < 0 || idx >= (int)e->attachments.size()) {
-            toast("编号无效", 2);
-            return;
-        }
-        try {
-            fs::path path = repo_.store.resolve(e->attachments[(size_t)idx]);
-            std::wstring wpath = path.wstring();
-            ShellExecuteW(nullptr, L"open", wpath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            toast("已打开 " + e->attachments[(size_t)idx].name, 2);
-        } catch (const std::exception& ex) {
-            toast(std::string("无法打开：") + ex.what(), 4);
+        std::string id = e->id;
+        int selected = 0;
+        for (;;) {
+            e = repo_.find(id);
+            if (!e || e->attachments.empty()) break;
+            selected = std::max(0, std::min(selected, (int)e->attachments.size() - 1));
+            draw_attachment_modal(id, selected);
+            Key key = console_.read_key(60000);
+            if (key.type == Key::Type::Escape) break;
+            if (key.type == Key::Type::Up) {
+                selected = std::max(0, selected - 1);
+                continue;
+            }
+            if (key.type == Key::Type::Down) {
+                selected = std::min((int)e->attachments.size() - 1, selected + 1);
+                continue;
+            }
+            bool open = key.type == Key::Type::Enter ||
+                        (key.type == Key::Type::Char && key.ch == 'o');
+            bool remove = key.type == Key::Type::Delete ||
+                          (key.type == Key::Type::Char && key.ch == 'x');
+            if (open) {
+                try {
+                    fs::path path = repo_.store.resolve(e->attachments[(size_t)selected]);
+                    std::wstring wpath = path.wstring();
+                    ShellExecuteW(nullptr, L"open", wpath.c_str(), nullptr, nullptr,
+                                  SW_SHOWNORMAL);
+                    toast("已打开 " + e->attachments[(size_t)selected].name, 2);
+                } catch (const std::exception& ex) {
+                    toast(std::string("无法打开：") + ex.what(), 4);
+                }
+                break;
+            }
+            if (remove) {
+                std::string name = e->attachments[(size_t)selected].name;
+                repo_.remove_attachment(id, selected);
+                sync_mtime();
+                toast("已移除附件：" + name + "（Ctrl+Z 可撤销）", 4);
+                continue;
+            }
+            if (key.type == Key::Type::Char && key.ch == 'q') break;
         }
     }
 

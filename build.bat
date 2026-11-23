@@ -62,4 +62,4 @@ echo.
 echo Done:
 echo   build\moji.exe       console / TUI / CLI / "moji gui" launcher
 echo   build\moji-gui.exe   Qt Widgets GUI (with Qt runtime beside it)
-echo   build\test_core.exe  core tests (68 checks)
+echo   build\test_core.exe  core tests (70 checks)
