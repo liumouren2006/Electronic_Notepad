@@ -101,7 +101,7 @@ moji
 > - PowerShell：`$env:NO_PROXY='*'` 后再执行 pip；
 > - Bash：`NO_PROXY="*" pip install ...`。
 > 若 pip 构建隔离拉不到 `setuptools`，先 `pip install -U setuptools wheel`，再加 `--no-build-isolation`。
-> `install.ps1` 已内置以上处理：自动设置 `NO_PROXY`、失败时切清华镜像、用 `--no-build-isolation` 构建。
+> `install.ps1` 已内置以上处理：自动设置 `NO_PROXY`、优先走清华镜像（失败再回退默认 PyPI）、用 `--no-build-isolation` 构建。
 
 ### 启动
 

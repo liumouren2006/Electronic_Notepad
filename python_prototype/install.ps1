@@ -36,11 +36,12 @@ try {
     $env:no_proxy = "*"
 
     Write-Host "使用 Python: $python"
+    $index = "https://pypi.tuna.tsinghua.edu.cn/simple"
     Write-Host "升级 pip / setuptools / wheel ..."
-    & $python -m pip install --upgrade pip setuptools wheel
+    & $python -m pip install -i $index --upgrade pip setuptools wheel
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "默认 PyPI 失败，尝试清华镜像..."
-        & $python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --upgrade pip setuptools wheel
+        Write-Host "清华镜像失败，尝试默认 PyPI..."
+        & $python -m pip install --upgrade pip setuptools wheel
         if ($LASTEXITCODE -ne 0) {
             throw "无法下载 pip 构建依赖。请检查网络后重试，或手动执行：`$env:NO_PROXY='*'"
         }
@@ -55,15 +56,15 @@ try {
     }
 
     # 已经升级过 setuptools，直接用本地构建，避免构建隔离再次联网下载
-    $pipArgs = @("install", "--no-build-isolation")
+    $pipArgs = @("install", "--no-build-isolation", "-i", $index)
     if (-not $inVenv) { $pipArgs += "--user" }
     $pipArgs += ".[$extras]"
 
     Write-Host "安装 moji-note[$extras] ..."
     & $python -m pip @pipArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "首次安装失败，改用镜像 + 构建隔离重试..."
-        $retry = @("install", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple")
+        Write-Host "镜像安装失败，改用默认 PyPI + 构建隔离重试..."
+        $retry = @("install")
         if (-not $inVenv) { $retry += "--user" }
         $retry += ".[$extras]"
         & $python -m pip @retry
