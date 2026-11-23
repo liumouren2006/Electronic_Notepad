@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+*.log
+
+# 演示 / 测试数据目录
+/demo-data/
+/test-data/
+/gui-data/
+/gui-light-data/
+/gui-dark-data/
+/tui-demo-data/
+
+# C 版编译产物
+c_legacy/notebook
+c_legacy/notebook.exe
+c_legacy/*.o
+
+# 截图中间文件
+docs/*.render.svg
