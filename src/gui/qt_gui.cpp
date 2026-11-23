@@ -468,6 +468,23 @@ public:
         update();
     }
 
+    void update_relative_time() {
+        if (!due_label_ || !event_.due.has_value() || event_.done) return;
+        const QString text = "⏱ " + qs(humanize_due(event_.due));
+        QString fg = pal_.muted;
+        QString bg = pal_.surfaceAlt;
+        if (event_.is_overdue()) {
+            fg = pal_.error;
+            bg = pal_.errorSoft;
+        } else if (event_.is_due_today()) {
+            fg = pal_.warning;
+            bg = pal_.warningSoft;
+        }
+        due_label_->setText(text);
+        due_label_->setStyleSheet(chip_style(fg, bg));
+    }
+
+
 protected:
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton && on_click_) on_click_(e->modifiers());
@@ -521,21 +538,23 @@ private:
         auto* meta = new QHBoxLayout();
         meta->setSpacing(6);
         meta->setContentsMargins(0, 0, 0, 0);
-        auto chip = [this, meta](const QString& text, const QString& fg, const QString& bg) {
+        auto chip = [this, meta](const QString& text, const QString& fg,
+                                 const QString& bg) -> QLabel* {
             auto* label = new QLabel(text, this);
             label->setStyleSheet(chip_style(fg, bg));
             label->setAttribute(Qt::WA_TransparentForMouseEvents);
             meta->addWidget(label);
+            return label;
         };
         if (e.done) {
             chip("已完成", pal_.muted, pal_.surfaceAlt);
         } else if (e.due.has_value()) {
             if (e.is_overdue()) {
-                chip("⏱ " + qs(humanize_due(e.due)), pal_.error, pal_.errorSoft);
+                due_label_ = chip("⏱ " + qs(humanize_due(e.due)), pal_.error, pal_.errorSoft);
             } else if (e.is_due_today()) {
-                chip("⏱ " + qs(humanize_due(e.due)), pal_.warning, pal_.warningSoft);
+                due_label_ = chip("⏱ " + qs(humanize_due(e.due)), pal_.warning, pal_.warningSoft);
             } else {
-                chip("⏱ " + qs(humanize_due(e.due)), pal_.muted, pal_.surfaceAlt);
+                due_label_ = chip("⏱ " + qs(humanize_due(e.due)), pal_.muted, pal_.surfaceAlt);
             }
         } else {
             chip("无期限", pal_.muted, pal_.surfaceAlt);
@@ -563,6 +582,7 @@ private:
 
     Event event_;
     Pal pal_;
+    QLabel* due_label_ = nullptr;
     std::function<void(Qt::KeyboardModifiers)> on_click_;
     std::function<void()> on_toggle_;
     std::function<void()> on_double_;
@@ -931,10 +951,22 @@ public:
     DetachedPageWindow(Repository& repo, Event* event, QWidget* parent = nullptr)
         : QMainWindow(parent), repo_(repo), event_id_(event ? qs(event->id) : QString()) {
         setAttribute(Qt::WA_DeleteOnClose);
-        setMinimumSize(460, 360);
-        resize(760, 840);
+        setMinimumSize(480, 380);
+        resize(780, 850);
         setWindowTitle("墨记 · " + (event ? qs(event->title) : QString("页面")));
+        dark_ = repo_.store.load_config().value("theme", std::string("light")) == "dark";
 
+        stack_ = new QStackedWidget(this);
+        stack_->addWidget(build_page(event));
+        stack_->addWidget(build_editor(event));
+        stack_->setCurrentIndex(0);
+        setCentralWidget(stack_);
+    }
+
+    std::function<void(const QString&)> on_saved;
+
+private:
+    QWidget* build_page(Event* event) {
         auto* panel = new QFrame(this);
         panel->setObjectName("EditorPanel");
         auto* layout = new QVBoxLayout(panel);
@@ -942,23 +974,21 @@ public:
         layout->setSpacing(8);
 
         auto* header = new QHBoxLayout();
-        auto* title = new QLabel(event ? qs(event->title) : QString(), panel);
-        title->setObjectName("ViewTitle");
-        title->setWordWrap(true);
-        header->addWidget(title, 1);
+        page_title_ = new QLabel(event ? qs(event->title) : QString(), panel);
+        page_title_->setObjectName("ViewTitle");
+        page_title_->setWordWrap(true);
+        header->addWidget(page_title_, 1);
         auto* edit = new QPushButton("✎ 编辑", panel);
         edit->setObjectName("Primary");
         edit->setCursor(Qt::PointingHandCursor);
-        connect(edit, &QPushButton::clicked, this, [this] {
-            if (on_edit) on_edit(event_id_);
-        });
+        connect(edit, &QPushButton::clicked, this, [this] { show_editor(); });
         header->addWidget(edit);
         layout->addLayout(header);
 
-        auto* meta = new QLabel(event ? meta_text(event) : QString(), panel);
-        meta->setObjectName("ViewMeta");
-        meta->setWordWrap(true);
-        layout->addWidget(meta);
+        page_meta_ = new QLabel(event ? meta_text(event) : QString(), panel);
+        page_meta_->setObjectName("ViewMeta");
+        page_meta_->setWordWrap(true);
+        layout->addWidget(page_meta_);
 
         page_ = new PageEditor(repo_, panel);
         page_->set_read_only(true);
@@ -1004,25 +1034,251 @@ public:
                     });
             layout->addWidget(list);
         }
-        setCentralWidget(panel);
+        return panel;
     }
 
-    std::function<void(const QString&)> on_edit;
+    QWidget* build_editor(Event* event) {
+        auto* panel = new QFrame(this);
+        panel->setObjectName("EditorPanel");
+        auto* layout = new QVBoxLayout(panel);
+        layout->setContentsMargins(24, 18, 24, 14);
+        layout->setSpacing(8);
 
-private:
-    static QString meta_text(Event* e) {
+        auto* header = new QHBoxLayout();
+        auto* caption = new QLabel("编辑记事", panel);
+        caption->setProperty("role", "h3");
+        header->addWidget(caption);
+        header->addStretch(1);
+        auto* cancel = new QPushButton("取消", panel);
+        cancel->setObjectName("Ghost");
+        connect(cancel, &QPushButton::clicked, this, [this] {
+            if (Event* e = repo_.find(event_id_.toStdString())) load_into_editor(e);
+            show_view();
+        });
+        auto* save = new QPushButton("保存", panel);
+        save->setObjectName("Ghost");
+        connect(save, &QPushButton::clicked, this, [this] { save_editor(false); });
+        auto* done = new QPushButton("完成", panel);
+        done->setObjectName("Primary");
+        connect(done, &QPushButton::clicked, this, [this] { save_editor(true); });
+        header->addWidget(cancel);
+        header->addWidget(save);
+        header->addWidget(done);
+        layout->addLayout(header);
+
+        title_edit_ = new QLineEdit(panel);
+        title_edit_->setObjectName("TitleEdit");
+        title_edit_->setPlaceholderText("标题");
+        layout->addWidget(title_edit_);
+
+        meta_label_ = new QLabel(panel);
+        meta_label_->setProperty("role", "muted");
+        layout->addWidget(meta_label_);
+
+        auto* due_row = new QHBoxLayout();
+        due_check_ = new QCheckBox("截止", panel);
+        due_edit_ = new QDateTimeEdit(panel);
+        due_edit_->setCalendarPopup(true);
+        due_edit_->setDisplayFormat("yyyy-MM-dd HH:mm");
+        due_edit_->setMinimumWidth(168);
+        remind_spin_ = new QSpinBox(panel);
+        remind_spin_->setRange(0, 10080);
+        remind_spin_->setSuffix(" 分钟前提醒");
+        connect(due_check_, &QCheckBox::toggled, this, [this](bool checked) {
+            due_edit_->setEnabled(checked);
+            if (checked && due_edit_->dateTime().isNull()) {
+                due_edit_->setDateTime(QDateTime::currentDateTime().addSecs(3600));
+            }
+        });
+        due_row->addWidget(due_check_);
+        due_row->addWidget(due_edit_, 1);
+        due_row->addWidget(remind_spin_);
+        layout->addLayout(due_row);
+
+        notify_check_ = new QCheckBox("提醒时使用 Windows 系统通知", panel);
+        layout->addWidget(notify_check_);
+
+        auto* tags_row = new QHBoxLayout();
+        tags_edit_ = new QLineEdit(panel);
+        tags_edit_->setPlaceholderText("标签：课程, 截止（逗号分隔）");
+        tags_row->addWidget(tags_edit_, 1);
+        auto* priority_label = new QLabel("优先级", panel);
+        priority_label->setProperty("role", "muted");
+        priority_spin_ = new QSpinBox(panel);
+        priority_spin_->setRange(1, 999);
+        priority_spin_->setPrefix("P");
+        priority_spin_->setFixedWidth(72);
+        tags_row->addWidget(priority_label);
+        tags_row->addWidget(priority_spin_);
+        layout->addLayout(tags_row);
+
+        auto* actions = new QHBoxLayout();
+        done_button_ = new QPushButton("标记完成", panel);
+        done_button_->setObjectName("Ghost");
+        connect(done_button_, &QPushButton::clicked, this, [this] {
+            if (repo_.find(event_id_.toStdString())) {
+                Event& updated = repo_.toggle_done(event_id_.toStdString());
+                load_into_editor(&updated);
+                refresh_page();
+                if (on_saved) on_saved(event_id_);
+            }
+        });
+        actions->addWidget(done_button_);
+        actions->addStretch(1);
+        status_label_ = new QLabel(panel);
+        status_label_->setProperty("role", "muted");
+        actions->addWidget(status_label_);
+        layout->addLayout(actions);
+
+        tabs_ = new QTabWidget(panel);
+        tabs_->setObjectName("NoteTabs");
+        note_edit_ = new QTextEdit(tabs_);
+        note_edit_->setObjectName("NoteEdit");
+        note_edit_->setAcceptRichText(false);
+        note_edit_->setPlaceholderText("写点什么… 支持 Markdown");
+        preview_ = new QTextBrowser(tabs_);
+        preview_->setObjectName("Preview");
+        preview_->setOpenExternalLinks(true);
+        tabs_->addTab(note_edit_, "编辑");
+        tabs_->addTab(preview_, "预览");
+        connect(note_edit_, &QTextEdit::textChanged, this, [this] {
+            if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+        });
+        connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
+            if (index == 1 && preview_) {
+                preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+            }
+        });
+        layout->addWidget(tabs_, 1);
+        if (event) load_into_editor(event);
+        return panel;
+    }
+
+    QString meta_text(Event* e) const {
         if (!e) return QString();
         QString meta = "P" + QString::number(e->priority) + "  ·  截止 " +
                        qs(humanize_due(e->due));
         if (!e->attachments.empty()) {
             meta += "  ·  附件 " + QString::number(e->attachments.size());
         }
+        if (e->system_notify) meta += "  ·  Windows 通知";
         return meta;
+    }
+
+    void load_into_editor(Event* e) {
+        if (!e) return;
+        loading_ = true;
+        title_edit_->setText(qs(e->title));
+        note_edit_->setPlainText(qs(e->note));
+        due_check_->setChecked(e->due.has_value());
+        due_edit_->setEnabled(e->due.has_value());
+        due_edit_->setDateTime(e->due.has_value()
+                                   ? QDateTime::fromSecsSinceEpoch((qint64)*e->due)
+                                   : QDateTime::currentDateTime().addSecs(3600));
+        remind_spin_->setValue(e->remind_before);
+        notify_check_->setChecked(e->system_notify);
+        tags_edit_->setText(qs(join(e->tags, ", ")));
+        priority_spin_->setMaximum(std::max(1, (int)repo_.events.size()));
+        priority_spin_->setValue(e->priority);
+        meta_label_->setText(meta_text(e));
+        done_button_->setText(e->done ? "取消完成" : "标记完成");
+        status_label_->setText("已保存 · " + clock_text(e->updated_at.value_or(now_time())));
+        if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+        loading_ = false;
+    }
+
+    bool save_editor(bool back) {
+        if (loading_) return false;
+        Event* e = repo_.find(event_id_.toStdString());
+        if (!e) {
+            status_label_->setText("事项已不存在");
+            return false;
+        }
+        QString title = title_edit_->text().trimmed();
+        if (title.isEmpty()) {
+            status_label_->setText("标题不能为空");
+            title_edit_->setFocus();
+            return false;
+        }
+        std::optional<std::time_t> due;
+        if (due_check_->isChecked()) {
+            due = (std::time_t)due_edit_->dateTime().toSecsSinceEpoch();
+        }
+        QString tags_text = tags_edit_->text();
+        tags_text.replace("，", ",");
+        std::vector<std::string> tags;
+        for (const QString& part : tags_text.split(',', Qt::SkipEmptyParts)) {
+            QString t = part.trimmed();
+            while (t.startsWith('#')) t.remove(0, 1);
+            if (!t.isEmpty() &&
+                std::find(tags.begin(), tags.end(), t.toStdString()) == tags.end()) {
+                tags.push_back(t.toStdString());
+            }
+        }
+        int old_priority = e->priority;
+        try {
+            repo_.update(event_id_.toStdString(), title.toStdString(),
+                         note_edit_->toPlainText().toStdString(), due, tags,
+                         remind_spin_->value(), std::nullopt, std::nullopt,
+                         std::nullopt, notify_check_->isChecked());
+            if (priority_spin_->value() != old_priority) {
+                repo_.move_to(event_id_.toStdString(), priority_spin_->value());
+            }
+            Event* updated = repo_.find(event_id_.toStdString());
+            if (updated) {
+                refresh_page();
+                load_into_editor(updated);
+                setWindowTitle("墨记 · " + qs(updated->title));
+                if (on_saved) on_saved(event_id_);
+            }
+            if (back) show_view();
+            return true;
+        } catch (const std::exception& ex) {
+            status_label_->setText(QString("保存失败：") + ex.what());
+            return false;
+        }
+    }
+
+    void refresh_page() {
+        Event* e = repo_.find(event_id_.toStdString());
+        if (!e) return;
+        if (page_title_) page_title_->setText(qs(e->title));
+        if (page_meta_) page_meta_->setText(meta_text(e));
+        if (page_) page_->set_event(e);
+        setWindowTitle("墨记 · " + qs(e->title));
+    }
+
+    void show_view() {
+        refresh_page();
+        if (stack_) stack_->setCurrentIndex(0);
+    }
+
+    void show_editor() {
+        if (Event* e = repo_.find(event_id_.toStdString())) load_into_editor(e);
+        if (stack_) stack_->setCurrentIndex(1);
     }
 
     Repository& repo_;
     QString event_id_;
+    bool dark_ = false;
+    bool loading_ = false;
+    QStackedWidget* stack_ = nullptr;
+    QLabel* page_title_ = nullptr;
+    QLabel* page_meta_ = nullptr;
     PageEditor* page_ = nullptr;
+    QLineEdit* title_edit_ = nullptr;
+    QLabel* meta_label_ = nullptr;
+    QCheckBox* due_check_ = nullptr;
+    QDateTimeEdit* due_edit_ = nullptr;
+    QSpinBox* remind_spin_ = nullptr;
+    QCheckBox* notify_check_ = nullptr;
+    QLineEdit* tags_edit_ = nullptr;
+    QSpinBox* priority_spin_ = nullptr;
+    QPushButton* done_button_ = nullptr;
+    QLabel* status_label_ = nullptr;
+    QTabWidget* tabs_ = nullptr;
+    QTextEdit* note_edit_ = nullptr;
+    QTextBrowser* preview_ = nullptr;
 };
 
 // ---------------------------------------------------------------- 主窗口
@@ -1055,6 +1311,19 @@ public:
             flush_pending();
             refresh_list(true);
         });
+
+        relative_timer_ = new QTimer(this);
+        relative_timer_->setInterval(15000);
+        connect(relative_timer_, &QTimer::timeout, this, [this] {
+            for (EventCard* card : cards_) card->update_relative_time();
+            if (detail_visible_) {
+                if (Event* e = current()) {
+                    update_meta(e);
+                    if (view_meta_) view_meta_->setText(meta_for(e));
+                }
+            }
+        });
+        relative_timer_->start();
 
         if (!shot_mode_) {
             remind_timer_ = new QTimer(this);
@@ -2139,24 +2408,18 @@ private:
         Event* e = current();
         if (!e) return nullptr;
         auto* window = new DetachedPageWindow(repo_, e);
-        window->on_edit = [this](const QString& id) {
-            showNormal();
-            raise();
-            activateWindow();
-            Event* ev = repo_.find(id.toStdString());
-            if (!ev) return;
-            current_id_ = id;
-            selection_.clear();
-            selection_.insert(id);
-            anchor_id_ = id;
-            load_editor(ev);
+        window->on_saved = [this](const QString& id) {
+            refresh_list(false);
+            if (detail_visible_ && current_id_ == id) {
+                if (Event* ev = repo_.find(id.toStdString())) load_view(ev);
+            }
         };
         window->show();
         QPoint center = frameGeometry().center();
         window->move(std::max(0, center.x() - window->width() / 2),
                      std::max(0, center.y() - window->height() / 2));
         close_detail();
-        if (toast_) toast_->show_message("页面已拖出", "可在新窗口拖动边缘缩放", "⧉", 2600);
+        if (toast_) toast_->show_message("页面已拖出", "可在新窗口拖动边缘缩放", "⤴", 2600);
         return window;
     }
 
@@ -2882,6 +3145,7 @@ private:
     QSystemTrayIcon* tray_ = nullptr;
     QTimer* save_timer_ = nullptr;
     QTimer* search_timer_ = nullptr;
+    QTimer* relative_timer_ = nullptr;
     QTimer* remind_timer_ = nullptr;
 };
 
@@ -2932,9 +3196,21 @@ int run_qt_gui(int argc, char** argv) {
             window.setAttribute(Qt::WA_DontShowOnScreen, true);
         }
         window.show();
+        if (detached && qEnvironmentVariableIsSet("MOJI_GUI_DETACH_EDIT")) {
+            QTimer::singleShot(200, detached, [detached] {
+                for (QPushButton* b : detached->findChildren<QPushButton*>()) {
+                    if (b->text().contains("编辑")) {
+                        b->click();
+                        break;
+                    }
+                }
+            });
+        }
         if (!screenshot.isEmpty()) {
             const QString detach_shot = qEnvironmentVariable("MOJI_GUI_DETACH_SHOT");
-            QTimer::singleShot(1400, &app, [&window, screenshot, &app, detached, detach_shot] {
+            int delay_ms = qEnvironmentVariableIntValue("MOJI_GUI_SHOT_DELAY");
+            if (delay_ms <= 0) delay_ms = 1400;
+            QTimer::singleShot(delay_ms, &app, [&window, screenshot, &app, detached, detach_shot] {
                 window.grab().save(screenshot, "PNG");
                 if (detached && !detach_shot.isEmpty()) {
                     detached->grab().save(detach_shot, "PNG");
