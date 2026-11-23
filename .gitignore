@@ -23,3 +23,7 @@ c_legacy/notebook
 c_legacy/notebook.exe
 c_legacy/*.o
 
+
+# RTXUI PoC（依赖按需克隆，不提交上游源码/构建目录）
+/third_party/rtxui/
+/rtxui_poc/build/
