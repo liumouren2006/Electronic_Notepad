@@ -65,7 +65,7 @@
 
 ## 快速开始
 
-### 方式一：一键安装脚本（自动加入用户 PATH）
+### 方式一：一键安装脚本（推荐）
 
 Windows PowerShell：
 
@@ -79,7 +79,17 @@ Linux / macOS：
 bash install.sh
 ```
 
-脚本会：安装 `moji-note[all]` → 把 pip 用户级 Scripts 目录写入用户环境变量 → 提示重新打开终端后使用 `moji`。
+Windows 脚本默认在 `%LOCALAPPDATA%\MoJi\venv` 创建独立虚拟环境，安装 `moji-note[all]`，再把这个环境的 `Scripts` 目录追加到用户 PATH；不会改动系统 Python。重新打开终端后即可使用 `moji`。
+
+可选参数：
+
+```powershell
+.\install.ps1 -NoGui                 # 只装终端版（不装 PySide6）
+.\install.ps1 -NoTui                 # 只装图形版
+.\install.ps1 -VenvDir D:\moji-venv  # 指定虚拟环境位置
+```
+
+> 为什么不再直接装到系统 Python：全局 `site-packages` 里如果有旧版 `pyreadline`，它在 Python 3.10 下会因 `collections.Callable` 被移除而崩溃，连 pip 自己导入 `readline` 都会失败。独立 venv 不受这类历史残留影响，也避免污染其他项目。
 
 ### 方式二：虚拟环境安装
 
@@ -102,6 +112,7 @@ moji
 > - Bash：`NO_PROXY="*" pip install ...`。
 > 若 pip 构建隔离拉不到 `setuptools`，先 `pip install -U setuptools wheel`，再加 `--no-build-isolation`。
 > `install.ps1` 已内置以上处理：自动设置 `NO_PROXY`、优先走清华镜像（失败再回退默认 PyPI）、用 `--no-build-isolation` 构建。
+> 如果看到 `module 'collections' has no attribute 'Callable'` 或 `~ip-*.dist-info`，说明系统 Python 里有损坏的 pip/旧 pyreadline 残留；不要继续用 `--user` 装，直接运行 `install.ps1` 的独立 venv 模式即可绕过。确需修复系统 Python，可卸载 `pyreadline` 并删除 `site-packages` 下以 `~` 或 `-` 开头的残留目录（操作前先备份）。
 
 ### 启动
 

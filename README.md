@@ -397,10 +397,12 @@ gcc -std=c89 -Wall -Wextra -O2 -o c_legacy/notebook c_legacy/notebook.c
 
 ```bash
 cd python_prototype
-python -m venv .venv && .venv\Scripts\activate
-pip install -e ".[all]"
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+# 默认装到 %LOCALAPPDATA%\MoJi\venv，不改系统 Python
 moji
 ```
+
+也可以手动建 venv：`python -m venv .venv && .venv\Scripts\activate && pip install -e ".[all]"`。如果系统 Python 里残留旧版 `pyreadline`（Python 3.10 报 `collections.Callable`），请直接用 `install.ps1` 的独立 venv 模式绕过。
 
 ---
 
