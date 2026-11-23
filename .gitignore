@@ -9,16 +9,19 @@ dist/
 
 # 演示 / 测试数据目录
 /demo-data/
+/demo-light/
+/demo-dark/
 /test-data/
 /gui-data/
 /gui-light-data/
 /gui-dark-data/
 /tui-demo-data/
+/python_prototype/demo-data/
 
 # C 版编译产物
 c_legacy/notebook
 c_legacy/notebook.exe
 c_legacy/*.o
 
-# 截图中间文件
-docs/*.render.svg
+# 第三方压缩包（源码已解压）
+third_party/imgui.zip
