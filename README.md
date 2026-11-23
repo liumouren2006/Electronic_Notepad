@@ -16,6 +16,10 @@
 | --- | --- |
 | ![预览](docs/gui-preview.png) | ![页面](docs/gui-page.png) |
 
+| 页面拖出为独立窗口 | TUI 模态编辑表单 |
+| --- | --- |
+| ![拖出窗口](docs/gui-detached.png) | ![TUI 编辑](docs/tui-edit.png) |
+
 > 多选、主题色与自定义图标效果见 [`docs/gui-multi.png`](docs/gui-multi.png)。
 
 ---
@@ -150,8 +154,9 @@ build\moji-gui.exe                   :: 窗口版 GUI（读取 MOJI_HOME）
 | --- | --- |
 | `↑` `↓` | 选择任务；`PgUp/PgDn` 翻页 |
 | `Space` / `d` | 勾选 / 取消；也可鼠标点左侧方框 |
-| `a` | 新增（标题、截止、标签、提醒、位置、备注） |
-| `e` | 编辑选中任务 |
+| `a` | 新增：居中模态表单（标题、截止、提醒、位置、标签、多行备注） |
+| `e` | 编辑：同一套模态表单（Tab/↑↓ 切换，Ctrl+S 保存，Esc 取消） |
+| `F1`–`F4` | 表单内快捷时间：今天 18:00 / 明天 09:00 / 下周一 09:00 / 清除 |
 | `x` / `Delete` | 删除（需确认） |
 | `[` / `]` | 提高 / 降低优先级 |
 | `t` / `0` / `1` / `2` / `3` | 今日 / 全部 / 待办 / 已完成 / 逾期 |
@@ -163,7 +168,9 @@ build\moji-gui.exe                   :: 窗口版 GUI（读取 MOJI_HOME）
 | `?` | 帮助 |
 | `q` | 退出 |
 
-TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建议窗口 ≥ 100×30。详情区会渲染 Markdown 表格；`?` 打开居中的帮助面板，结构与 Python 原型一致。
+TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建议窗口 ≥ 100×30。详情区会渲染 Markdown 表格；`?` 打开居中的帮助面板，结构与 Python 原型一致。`a` / `e` 的表单也改为居中模态窗口：
+
+![TUI 编辑表单](docs/tui-edit.png)
 
 ### GUI
 
@@ -171,6 +178,8 @@ TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建
 - 中间：搜索、卡片流；点击卡片先打开只读页面，双击或右上角「✎ 编辑」进入编辑。
 - 启动时不预读任何卡片，右侧默认收起；页面右上角 `✕` 可关闭分屏，再点卡片重新打开。
 - 右侧页面：标题、元信息、OneNote 页面（Markdown 文字层、图片层、墨迹层）和附件；点「编辑」后修改，约 0.7 秒自动保存。
+- 页面滚轮：直接滚 = 上下滚动；`Ctrl+滚轮` = 左右滚动；`Ctrl+Shift+滚轮` = 以鼠标位置为中心缩放。
+- 页面右上角 `⤴` / 「视图 → 拖出当前页面…」可把页面拖成独立可缩放窗口；窗口里的「编辑」会回到主窗口编辑。
 - 编辑顶栏「完成」保存并返回页面；「提醒时使用 Windows 系统通知」可为该事项开启系统通知。
 - 逾期/已完成等分类为空时只显示一句「没有符合条件的记事」，不再显示新建引导和右侧分屏。
 - 附件：从资源管理器拖入窗口、粘贴剪贴板图片、手绘、双击打开、右键移除。
@@ -187,7 +196,7 @@ TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建
 TUI：
 
 1. 复制 [`docs/tui-theme.example.json`](docs/tui-theme.example.json) 到数据目录，命名为 `tui-theme.json`；
-2. 可修改 `colors.*`、`sidebar_width`、`show_hint`、`font_face`、`font_size`；
+2. 可修改 `colors.*`、`sidebar_width`、`font_face`、`font_size`；
 3. 启动时读取；运行中按 `T` 可重新加载；
 4. 终端字体由 Windows 控制台 API 设置，`font_face`/`font_size` 留空或 0 表示不修改。
 
@@ -435,6 +444,7 @@ moji
 - [`开发日志.md`](开发日志.md) —— 从 Python 原型到 C++ 主实现的完整过程、踩坑与修复
 - [`需求对照.md`](需求对照.md) —— 作业要求逐条对应
 - [`docs/设计说明.md`](docs/设计说明.md) —— 数据结构、文件格式、函数原型、容错
+- [`docs/TUI框架调研.md`](docs/TUI框架调研.md) —— Textual 的 C/C++ 替代品调研与取舍
 
 ## License
 

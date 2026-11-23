@@ -148,7 +148,6 @@ struct TuiTheme {
     Rgb note_text{196, 201, 214};
     Rgb white{255, 255, 255};
     int sidebar_width = 44;
-    bool show_hint = true;
     std::string font_face;   // 留空表示不修改终端字体
     int font_size = 0;
 };
@@ -186,7 +185,6 @@ TuiTheme load_tui_theme(const fs::path& data_dir) {
     try {
         auto j = nlohmann::json::parse(text);
         t.sidebar_width = std::max(30, std::min(60, j.value("sidebar_width", 44)));
-        t.show_hint = j.value("show_hint", true);
         t.font_face = j.value("font_face", std::string(""));
         t.font_size = j.value("font_size", 0);
         if (j.contains("colors") && j["colors"].is_object()) {
@@ -234,6 +232,8 @@ struct Key {
         End,
         Undo,
         Redo,
+        CtrlS,
+        Function,
         Mouse,
         WheelUp,
         WheelDown,
@@ -243,6 +243,7 @@ struct Key {
     wchar_t ch = 0;
     int x = 0;
     int y = 0;
+    int fkey = 0;
 };
 
 class Console {
@@ -381,6 +382,7 @@ public:
             if (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) {
                 if (k.wVirtualKeyCode == 'Z') return Key{Key::Type::Undo};
                 if (k.wVirtualKeyCode == 'Y') return Key{Key::Type::Redo};
+                if (k.wVirtualKeyCode == 'S') return Key{Key::Type::CtrlS};
                 if (k.wVirtualKeyCode == 'C') return Key{Key::Type::Quit};
             }
             Key out;
@@ -393,6 +395,10 @@ public:
                 case VK_NEXT: out.type = Key::Type::PageDown; return out;
                 case VK_BACK: out.type = Key::Type::Backspace; return out;
                 case VK_DELETE: out.type = Key::Type::Delete; return out;
+                case VK_F1: case VK_F2: case VK_F3: case VK_F4:
+                    out.type = Key::Type::Function;
+                    out.fkey = k.wVirtualKeyCode - VK_F1 + 1;
+                    return out;
                 case VK_ESCAPE: out.type = Key::Type::Escape; return out;
                 default: break;
             }
@@ -694,14 +700,6 @@ private:
             }
             add(line2);
         }
-        while ((int)side.size() < console_.height() - 4) add(bg(theme_.panel));
-        if (theme_.show_hint) {
-            add(bg(theme_.panel) + " " + fg(theme_.dim) +
-                "↑↓ 选择  Space 勾选  a 新增  ? 帮助");
-        } else {
-            add(bg(theme_.panel));
-        }
-        add(bg(theme_.panel));
         while ((int)side.size() < console_.height() - 2) add(bg(theme_.panel));
     }
 
@@ -1134,96 +1132,272 @@ private:
         toast("已删除（Ctrl+Z 可撤销）", 3);
     }
 
-    void do_add() {
-        console_.begin_input();
-        std::cout << "—— 新建记事 ——\n";
-        std::string title = trim(console_.ask("标题"));
-        if (title.empty()) {
-            console_.end_input();
-            toast("已取消：标题为空", 2);
-            return;
-        }
-        std::string due_text = console_.ask("截止时间 YYYY-MM-DD HH:MM（可空）");
-        std::optional<std::time_t> due;
-        while (!due_text.empty()) {
-            due = parse_datetime(due_text);
-            if (due.has_value()) break;
-            due_text = console_.ask("时间格式不对，请重新输入（回车跳过）");
-        }
-        std::string tags_text = console_.ask("标签（逗号分隔，可空）");
-        std::string remind_text = console_.ask("提前提醒分钟", "0");
-        std::string pos_text = console_.ask("插入到第几位（可空=末尾）");
-        std::string note = console_.ask("备注（一行，可空）");
-        console_.end_input();
+    void show_event_form(Event* existing) {
+        bool editing = existing != nullptr;
+        std::string id = existing ? existing->id : "";
+        int original_priority = existing ? existing->priority : 0;
+        std::vector<std::string> values = {
+            existing ? existing->title : "",
+            existing && existing->due.has_value()
+                ? date_str(*existing->due) + " " + clock_str(*existing->due)
+                : "",
+            existing ? std::to_string(existing->remind_before) : "0",
+            existing ? std::to_string(existing->priority) : "",
+            existing ? join(existing->tags, ", ") : "",
+            existing ? existing->note : "",
+        };
+        int focus = 0;
+        std::string error;
+        auto fmt_time = [](std::time_t t) { return date_str(t) + " " + clock_str(t); };
+        auto to_int = [](const std::string& text, int& out) {
+            std::string t = trim(text);
+            if (t.empty()) return false;
+            size_t used = 0;
+            try {
+                out = std::stoi(t, &used);
+            } catch (...) {
+                return false;
+            }
+            return used == t.size();
+        };
 
-        int remind = std::atoi(remind_text.c_str());
-        std::optional<int> pos;
-        if (!pos_text.empty()) {
-            int p = std::atoi(pos_text.c_str());
-            if (p >= 1) pos = p;
-        }
-        try {
-            Event& e = repo_.add(title, note, due, split_tags(tags_text), pos, remind);
-            selected_id_ = e.id;
-            mode_ = "all";
-            search_.clear();
-            refresh_visible();
-            sync_mtime();
-            toast("已加入 P" + std::to_string(e.priority) + "：" + e.title, 3);
-        } catch (const std::exception& ex) {
-            toast(std::string("新增失败：") + ex.what(), 5);
+        for (;;) {
+            draw();
+            int w = std::max(80, console_.width() - 1);
+            int h = std::max(24, console_.height() - 1);
+            int box_w = std::min(94, std::max(62, w - 8));
+            int inner = box_w - 4;
+            int note_h = std::max(3, std::min(6, h - 20));
+
+            auto row = [&](const std::string& content) {
+                int cw = visible_width(content);
+                return bg(theme_.panel) + fg(theme_.border) + "│" +
+                       bg(theme_.panel) + " " + content + bg(theme_.panel) +
+                       std::string((size_t)std::max(0, inner - cw), ' ') +
+                       fg(theme_.border) + " │";
+            };
+            auto field = [&](const std::string& label, const std::string& value,
+                             const std::string& placeholder, int width, bool focused) {
+                int avail = std::max(2, width - 7);
+                std::string shown = value.empty() ? placeholder : value;
+                if (focused) shown += "▏";
+                shown = truncate_display(shown, avail);
+                std::string label_color = focused ? fg(theme_.primary) : fg(theme_.muted);
+                std::string border_color = focused ? fg(theme_.primary) : fg(theme_.border);
+                std::string text_color =
+                    value.empty() && !focused ? fg(theme_.dim) : fg(theme_.text);
+                std::string out = label_color + label + " " + border_color + "[" +
+                                  text_color + shown;
+                int pad = avail - display_width(shown);
+                if (pad > 0) out += std::string((size_t)pad, ' ');
+                out += border_color + "]";
+                int used = visible_width(out);
+                if (used < width) out += std::string((size_t)(width - used), ' ');
+                return out;
+            };
+
+            std::vector<std::string> box;
+            box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╭" +
+                          repeat_text("─", box_w - 2) + "╮");
+            box.push_back(row(fg(theme_.white) +
+                              (editing ? "✎ 编辑记事" : "＋ 新建记事")));
+            box.push_back(row(""));
+            box.push_back(row(field("标题", values[0], "要做什么？", inner - 2, focus == 0)));
+            std::string due_row = field("截止", values[1], "YYYY-MM-DD HH:MM",
+                                        38, focus == 1) +
+                                  " " +
+                                  field("提醒", values[2], "0", 14, focus == 2) +
+                                  "分 " +
+                                  field("位置", values[3], "末位", 12, focus == 3);
+            box.push_back(row(due_row));
+            box.push_back(row(fg(theme_.dim) + "快捷  " + fg(theme_.primary) + "F1" +
+                              fg(theme_.muted) + " 今天18:00   " +
+                              fg(theme_.primary) + "F2" + fg(theme_.muted) +
+                              " 明天09:00   " + fg(theme_.primary) + "F3" +
+                              fg(theme_.muted) + " 下周一09:00   " +
+                              fg(theme_.primary) + "F4" + fg(theme_.muted) +
+                              " 清除时间"));
+            box.push_back(row(field("标签", values[4], "课程, 截止", inner - 4,
+                                    focus == 4)));
+            box.push_back(row(""));
+            box.push_back(row(fg(theme_.muted) +
+                              "备注（支持 Markdown；Enter 换行，Ctrl+S 保存）"));
+
+            int nw = inner;
+            std::string note_border =
+                focus == 5 ? fg(theme_.primary) : fg(theme_.border);
+            box.push_back(row(note_border + "┌" + repeat_text("─", nw - 2) + "┐"));
+            auto note_lines = split(values[5], '\n');
+            if (note_lines.empty()) note_lines.push_back("");
+            int start = std::max(0, (int)note_lines.size() - note_h);
+            for (int i = 0; i < note_h; ++i) {
+                int index = start + i;
+                std::string text =
+                    index < (int)note_lines.size() ? note_lines[(size_t)index] : "";
+                bool caret = focus == 5 && index == (int)note_lines.size() - 1;
+                bool placeholder = text.empty() && focus != 5 && i == 0;
+                std::string shown = placeholder ? "支持 Markdown…" : text;
+                if (caret) shown += "▏";
+                shown = truncate_display(shown, nw - 4);
+                std::string color =
+                    placeholder ? fg(theme_.dim) : fg(theme_.note_text);
+                box.push_back(row(note_border + "│ " + color +
+                                  pad_display(shown, nw - 4) + note_border + " │"));
+            }
+            box.push_back(row(note_border + "└" + repeat_text("─", nw - 2) + "┘"));
+            box.push_back(row(""));
+            box.push_back(row(error.empty()
+                                  ? fg(theme_.dim) +
+                                        "Tab / ↑↓ 切换 · Ctrl+S 保存 · Esc 取消"
+                                  : fg(theme_.error) + truncate_display(error, inner)));
+            std::string buttons =
+                fg(theme_.muted) + "取消 (Esc)" + "      " + bg(theme_.primary) +
+                fg(theme_.white) + " 保存 (Ctrl+S) ";
+            int pad = std::max(0, inner - visible_width(buttons));
+            box.push_back(row(std::string((size_t)pad, ' ') + buttons));
+            box.push_back(bg(theme_.panel) + fg(theme_.primary) + "╰" +
+                          repeat_text("─", box_w - 2) + "╯");
+            overlay_box(box, box_w);
+
+            Key key = console_.read_key(60000);
+            if (key.type == Key::Type::None || key.type == Key::Type::Resize) continue;
+            if (key.type == Key::Type::Escape) {
+                toast("已取消编辑", 2);
+                return;
+            }
+            if (key.type == Key::Type::Function) {
+                std::time_t now = now_time();
+                std::time_t day = start_of_day(now);
+                if (key.fkey == 1) {
+                    values[1] = fmt_time(day + 18 * 3600);
+                } else if (key.fkey == 2) {
+                    values[1] = fmt_time(start_of_day(now + 86400) + 9 * 3600);
+                } else if (key.fkey == 3) {
+                    std::tm tm{};
+#ifdef _WIN32
+                    localtime_s(&tm, &now);
+#else
+                    localtime_r(&now, &tm);
+#endif
+                    int days = (1 - tm.tm_wday + 7) % 7;
+                    if (days == 0) days = 7;
+                    values[1] = fmt_time(start_of_day(now) + days * 86400 + 9 * 3600);
+                } else if (key.fkey == 4) {
+                    values[1].clear();
+                }
+                focus = 1;
+                error.clear();
+                continue;
+            }
+            if (key.type == Key::Type::Up) {
+                focus = (focus + 5) % 6;
+                continue;
+            }
+            if (key.type == Key::Type::Down) {
+                focus = (focus + 1) % 6;
+                continue;
+            }
+            if (key.type == Key::Type::Char && key.ch == 9) {
+                focus = (focus + 1) % 6;
+                continue;
+            }
+            if (key.type == Key::Type::Backspace) {
+                std::string& s = values[(size_t)focus];
+                if (!s.empty()) {
+                    size_t pos = s.size() - 1;
+                    while (pos > 0 && ((unsigned char)s[pos] & 0xC0) == 0x80) --pos;
+                    s.erase(pos);
+                    error.clear();
+                }
+                continue;
+            }
+            if (key.type == Key::Type::Enter) {
+                if (focus == 5) {
+                    values[5] += "\n";
+                } else {
+                    focus = std::min(5, focus + 1);
+                }
+                continue;
+            }
+            if (key.type == Key::Type::CtrlS) {
+                std::string title = trim(values[0]);
+                if (title.empty()) {
+                    error = "标题不能为空";
+                    focus = 0;
+                    continue;
+                }
+                std::string due_text = trim(values[1]);
+                std::optional<std::time_t> due;
+                if (!due_text.empty()) {
+                    due = parse_datetime(due_text);
+                    if (!due.has_value()) {
+                        error = "截止时间格式不对，应为 YYYY-MM-DD HH:MM";
+                        focus = 1;
+                        continue;
+                    }
+                }
+                int remind = 0;
+                if (!trim(values[2]).empty() && !to_int(values[2], remind)) {
+                    error = "提前提醒需要是非负整数（分钟）";
+                    focus = 2;
+                    continue;
+                }
+                if (remind < 0) {
+                    error = "提前提醒需要是非负整数（分钟）";
+                    focus = 2;
+                    continue;
+                }
+                std::optional<int> pos;
+                int pos_value = 0;
+                if (!trim(values[3]).empty()) {
+                    if (!to_int(values[3], pos_value) || pos_value < 1) {
+                        error = "优先级位置需要是 ≥1 的整数";
+                        focus = 3;
+                        continue;
+                    }
+                    pos = pos_value;
+                }
+                std::vector<std::string> tags = split_tags(values[4]);
+                try {
+                    if (editing) {
+                        repo_.update(id, title, values[5], due, tags, remind);
+                        if (pos.has_value() && *pos != original_priority) {
+                            repo_.move_to(id, *pos);
+                        }
+                        selected_id_ = id;
+                        refresh_visible();
+                        sync_mtime();
+                        toast("已保存修改", 2);
+                    } else {
+                        Event& added =
+                            repo_.add(title, values[5], due, tags, pos, remind);
+                        selected_id_ = added.id;
+                        mode_ = "all";
+                        search_.clear();
+                        refresh_visible();
+                        sync_mtime();
+                        toast("已加入 P" + std::to_string(added.priority) + "：" +
+                                  added.title,
+                              3);
+                    }
+                } catch (const std::exception& ex) {
+                    error = std::string("保存失败：") + ex.what();
+                }
+                if (!error.empty()) continue;
+                return;
+            }
+            if (key.type == Key::Type::Char && key.ch >= 32) {
+                values[(size_t)focus] += to_utf8(std::wstring(1, key.ch));
+                error.clear();
+            }
         }
     }
 
+    void do_add() { show_event_form(nullptr); }
+
     void do_edit() {
         Event* e = current();
-        if (!e) return;
-        std::string id = e->id;
-        Event snapshot = *e;
-        console_.begin_input();
-        std::cout << "—— 编辑记事 ——\n";
-        std::cout << "当前标题：" << snapshot.title << "\n";
-        if (!snapshot.note.empty()) std::cout << "当前备注：\n" << snapshot.note << "\n";
-        std::string title = console_.ask("新标题（回车保持不变）", snapshot.title);
-        std::string due_default =
-            snapshot.due.has_value() ? iso_from_time(*snapshot.due) : "";
-        std::string due_text = console_.ask("新截止（回车保持，- 清除）", due_default);
-        std::string tags_text = console_.ask("新标签", join(snapshot.tags, ", "));
-        std::string remind_text =
-            console_.ask("提前提醒分钟", std::to_string(snapshot.remind_before));
-        std::string pos_text =
-            console_.ask("新的优先级位置（回车保持）", std::to_string(snapshot.priority));
-        std::string note = console_.ask("新备注（回车保持，- 清除）", "");
-        console_.end_input();
-
-        std::optional<std::time_t> due = snapshot.due;
-        if (due_text == "-") {
-            due.reset();
-        } else if (!due_text.empty()) {
-            auto parsed = parse_datetime(due_text);
-            if (!parsed.has_value()) {
-                toast("时间格式不对，未保存", 5);
-                return;
-            }
-            due = parsed;
-        }
-        std::string new_note = snapshot.note;
-        if (note == "-") new_note.clear();
-        else if (!note.empty()) new_note = note;
-        std::vector<std::string> tags =
-            trim(tags_text).empty() ? snapshot.tags : split_tags(tags_text);
-        int remind = std::atoi(remind_text.c_str());
-        try {
-            repo_.update(id, title, new_note, due, tags, remind);
-            int pos = std::atoi(pos_text.c_str());
-            if (pos >= 1 && pos != snapshot.priority) repo_.move_to(id, pos);
-            refresh_visible();
-            selected_id_ = id;
-            sync_mtime();
-            toast("已保存修改", 2);
-        } catch (const std::exception& ex) {
-            toast(std::string("保存失败：") + ex.what(), 5);
-        }
+        if (e) show_event_form(e);
     }
 
     void do_search() {

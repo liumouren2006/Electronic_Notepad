@@ -18,6 +18,7 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -293,6 +294,35 @@ public:
     std::function<void()> on_release;
 
 protected:
+    void wheelEvent(QWheelEvent* e) override {
+        int delta = e->angleDelta().y();
+        if (delta == 0) delta = e->angleDelta().x();
+        if (delta == 0) {
+            QGraphicsView::wheelEvent(e);
+            return;
+        }
+        if (e->modifiers() & Qt::ControlModifier) {
+            if (e->modifiers() & Qt::ShiftModifier) {
+                // Ctrl+Shift+滚轮：以鼠标位置为锚点缩放
+                qreal target = zoom_ * (delta > 0 ? 1.12 : 0.89);
+                target = std::max<qreal>(0.35, std::min<qreal>(3.0, target));
+                qreal factor = target / zoom_;
+                if (std::abs(factor - 1.0) > 0.001) {
+                    setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+                    scale(factor, factor);
+                    zoom_ = target;
+                }
+            } else {
+                // Ctrl+滚轮：左右滚动
+                QScrollBar* bar = horizontalScrollBar();
+                bar->setValue(bar->value() - delta);
+            }
+            e->accept();
+            return;
+        }
+        QGraphicsView::wheelEvent(e);
+    }
+
     void mousePressEvent(QMouseEvent* e) override {
         if (on_press && on_press(mapToScene(e->pos()), e->modifiers())) {
             e->accept();
@@ -311,6 +341,9 @@ protected:
         if (on_release) on_release();
         QGraphicsView::mouseReleaseEvent(e);
     }
+
+private:
+    qreal zoom_ = 1.0;
 };
 
 }  // namespace

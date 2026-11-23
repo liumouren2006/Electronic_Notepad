@@ -304,7 +304,7 @@ QTabWidget#NoteTabs::pane { border: 1px solid @{border}; border-radius: 10px; ba
 QTabBar::tab { background: @{surfaceAlt}; color: @{muted}; padding: 6px 14px; margin-right: 2px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
 QTabBar::tab:selected { background: @{primarySoft}; color: @{primary}; font-weight: 600; }
 QTextBrowser#Preview { background: @{input}; border: 1px solid @{border}; border-radius: 10px; padding: 6px; }
-QLabel#ViewTitle { font-size: 22px; font-weight: 700; color: @{text}; }
+QLabel#ViewTitle { font-size: 21px; font-weight: 700; color: @{text}; }
 QLabel#ViewMeta { color: @{muted}; font-size: 10pt; }
 QLabel#ViewSection { color: @{muted}; font-size: 9pt; font-weight: 700; }
 
@@ -925,6 +925,106 @@ private:
     SketchCanvas* canvas_ = nullptr;
 };
 
+// ---------------------------------------------------------------- 独立页面窗口
+class DetachedPageWindow : public QMainWindow {
+public:
+    DetachedPageWindow(Repository& repo, Event* event, QWidget* parent = nullptr)
+        : QMainWindow(parent), repo_(repo), event_id_(event ? qs(event->id) : QString()) {
+        setAttribute(Qt::WA_DeleteOnClose);
+        setMinimumSize(460, 360);
+        resize(760, 840);
+        setWindowTitle("墨记 · " + (event ? qs(event->title) : QString("页面")));
+
+        auto* panel = new QFrame(this);
+        panel->setObjectName("EditorPanel");
+        auto* layout = new QVBoxLayout(panel);
+        layout->setContentsMargins(24, 18, 24, 14);
+        layout->setSpacing(8);
+
+        auto* header = new QHBoxLayout();
+        auto* title = new QLabel(event ? qs(event->title) : QString(), panel);
+        title->setObjectName("ViewTitle");
+        title->setWordWrap(true);
+        header->addWidget(title, 1);
+        auto* edit = new QPushButton("✎ 编辑", panel);
+        edit->setObjectName("Primary");
+        edit->setCursor(Qt::PointingHandCursor);
+        connect(edit, &QPushButton::clicked, this, [this] {
+            if (on_edit) on_edit(event_id_);
+        });
+        header->addWidget(edit);
+        layout->addLayout(header);
+
+        auto* meta = new QLabel(event ? meta_text(event) : QString(), panel);
+        meta->setObjectName("ViewMeta");
+        meta->setWordWrap(true);
+        layout->addWidget(meta);
+
+        page_ = new PageEditor(repo_, panel);
+        page_->set_read_only(true);
+        page_->set_event(event);
+        layout->addWidget(page_, 1);
+
+        if (event && !event->attachments.empty()) {
+            auto* att_title = new QLabel("附件", panel);
+            att_title->setObjectName("ViewSection");
+            layout->addWidget(att_title);
+            auto* list = new QListWidget(panel);
+            list->setObjectName("Attachments");
+            list->setViewMode(QListWidget::IconMode);
+            list->setIconSize(QSize(64, 48));
+            list->setGridSize(QSize(100, 92));
+            list->setResizeMode(QListWidget::Adjust);
+            list->setMovement(QListWidget::Snap);
+            list->setWordWrap(true);
+            list->setMaximumHeight(110);
+            QFileIconProvider provider;
+            for (const auto& att : event->attachments) {
+                fs::path absolute;
+                try {
+                    absolute = repo_.store.resolve(att);
+                } catch (...) {
+                }
+                QIcon icon;
+                QPixmap px(qpath(absolute));
+                if (!px.isNull()) {
+                    icon = QIcon(px.scaled(QSize(64, 48), Qt::KeepAspectRatio,
+                                           Qt::SmoothTransformation));
+                } else {
+                    icon = provider.icon(QFileInfo(qpath(absolute)));
+                }
+                auto* item = new QListWidgetItem(icon, qs(att.name), list);
+                item->setData(Qt::UserRole, qpath(absolute));
+            }
+            connect(list, &QListWidget::itemDoubleClicked, this,
+                    [](QListWidgetItem* item) {
+                        if (!item) return;
+                        QDesktopServices::openUrl(
+                            QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));
+                    });
+            layout->addWidget(list);
+        }
+        setCentralWidget(panel);
+    }
+
+    std::function<void(const QString&)> on_edit;
+
+private:
+    static QString meta_text(Event* e) {
+        if (!e) return QString();
+        QString meta = "P" + QString::number(e->priority) + "  ·  截止 " +
+                       qs(humanize_due(e->due));
+        if (!e->attachments.empty()) {
+            meta += "  ·  附件 " + QString::number(e->attachments.size());
+        }
+        return meta;
+    }
+
+    Repository& repo_;
+    QString event_id_;
+    PageEditor* page_ = nullptr;
+};
+
 // ---------------------------------------------------------------- 主窗口
 class MainWindow : public QMainWindow {
 public:
@@ -991,6 +1091,11 @@ public:
     void debug_click_first() {
         auto events = visible_events();
         if (!events.empty()) select_event(events.front()->id, Qt::NoModifier);
+    }
+
+    QWidget* debug_detach_first() {
+        debug_click_first();
+        return detach_current_page();
     }
 
     void debug_open_first(bool edit) {
@@ -1271,11 +1376,18 @@ private:
         layout->setSpacing(10);
 
         auto* header = new QHBoxLayout();
-        header->setSpacing(8);
+        header->setSpacing(6);
         view_title_ = new QLabel("", panel);
         view_title_->setObjectName("ViewTitle");
         view_title_->setWordWrap(true);
         header->addWidget(view_title_, 1);
+        auto* detach = new QPushButton("⤴", panel);
+        detach->setObjectName("IconButton");
+        detach->setFixedSize(28, 30);
+        detach->setCursor(Qt::PointingHandCursor);
+        detach->setToolTip("拖出为独立窗口");
+        connect(detach, &QPushButton::clicked, this, [this] { detach_current_page(); });
+        header->addWidget(detach);
         auto* edit = new QPushButton("✎ 编辑", panel);
         edit->setObjectName("Primary");
         edit->setCursor(Qt::PointingHandCursor);
@@ -1713,6 +1825,10 @@ private:
             refresh_list(true);
             status_label_->setText("已刷新");
         });
+        auto* act_detach = view->addAction("拖出当前页面…");
+        connect(act_detach, &QAction::triggered, this, [this] { detach_current_page(); });
+        auto* act_close = view->addAction("关闭右侧页面");
+        connect(act_close, &QAction::triggered, this, [this] { close_detail(); });
         view->addSeparator();
         auto* act_accent = view->addAction("主题色…");
         connect(act_accent, &QAction::triggered, this, [this] { choose_accent(); });
@@ -2017,6 +2133,31 @@ private:
         apply_detail_sizes();
         // QSplitter 在子控件由隐藏变可见时会重新分配尺寸，下一轮再压一次。
         QTimer::singleShot(0, this, [this] { apply_detail_sizes(); });
+    }
+
+    QWidget* detach_current_page() {
+        Event* e = current();
+        if (!e) return nullptr;
+        auto* window = new DetachedPageWindow(repo_, e);
+        window->on_edit = [this](const QString& id) {
+            showNormal();
+            raise();
+            activateWindow();
+            Event* ev = repo_.find(id.toStdString());
+            if (!ev) return;
+            current_id_ = id;
+            selection_.clear();
+            selection_.insert(id);
+            anchor_id_ = id;
+            load_editor(ev);
+        };
+        window->show();
+        QPoint center = frameGeometry().center();
+        window->move(std::max(0, center.x() - window->width() / 2),
+                     std::max(0, center.y() - window->height() / 2));
+        close_detail();
+        if (toast_) toast_->show_message("页面已拖出", "可在新窗口拖动边缘缩放", "⧉", 2600);
+        return window;
     }
 
     void close_detail(bool flush = true) {
@@ -2777,6 +2918,8 @@ int run_qt_gui(int argc, char** argv) {
         const QString open = qEnvironmentVariable("MOJI_GUI_OPEN");
         if (!open.isEmpty()) window.debug_open_first(open == "edit");
         if (qEnvironmentVariableIsSet("MOJI_GUI_CLICK")) window.debug_click_first();
+        QWidget* detached = nullptr;
+        if (qEnvironmentVariableIsSet("MOJI_GUI_DETACH")) detached = window.debug_detach_first();
         const int multi = qEnvironmentVariableIntValue("MOJI_GUI_MULTI");
         if (multi > 1) window.select_test_multiple(multi, qEnvironmentVariableIsSet("MOJI_GUI_SHIFT"));
         const QString tab = qEnvironmentVariable("MOJI_GUI_TAB");
@@ -2790,8 +2933,12 @@ int run_qt_gui(int argc, char** argv) {
         }
         window.show();
         if (!screenshot.isEmpty()) {
-            QTimer::singleShot(1400, &app, [&window, screenshot, &app] {
+            const QString detach_shot = qEnvironmentVariable("MOJI_GUI_DETACH_SHOT");
+            QTimer::singleShot(1400, &app, [&window, screenshot, &app, detached, detach_shot] {
                 window.grab().save(screenshot, "PNG");
+                if (detached && !detach_shot.isEmpty()) {
+                    detached->grab().save(detach_shot, "PNG");
+                }
                 app.quit();
             });
         }
