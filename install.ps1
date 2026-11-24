@@ -106,6 +106,9 @@ if ($output.Ok -and -not $NoBuild) {
     Write-Ok "检测到已编译的 build\ 产物，跳过编译"
     $NoBuild = $true
 }
+if ($NoBuild -and -not $output.Ok) {
+    throw "指定了 -NoBuild，但 build\ 缺少：$($output.Missing -join ', ')。请先运行 build.bat，或去掉 -NoBuild。"
+}
 # ---------- 2. 构建环境 ----------
 if (-not $NoBuild) {
     Add-Msys2ToPath | Out-Null
