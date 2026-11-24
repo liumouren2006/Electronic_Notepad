@@ -118,24 +118,56 @@ build\test_core.exe  C++ 核心测试（70 个检查）
 
 ### 安装到系统
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-脚本会：
-
-1. 调用 `build.bat` 编译；
-2. 复制 exe、Qt 运行库（DLL + platforms/styles/imageformats 等插件）到 `%LOCALAPPDATA%\MoJi\bin`；
-3. 把该目录写入**用户 PATH**；
-4. 创建开始菜单快捷方式「墨记 MoJi」。
-
-之后新开终端即可：
+**方式一：一键脚本（推荐）**
 
 ```bat
-moji                  :: 默认进入 TUI
-moji gui              :: 打开 GUI
-moji-gui              :: 双击版 GUI
+install.bat
 ```
+
+脚本会先检测环境：
+
+1. 检查 64 位 Windows、`LOCALAPPDATA`；
+2. 检查 `build\` 是否已有 `moji.exe`、`moji-gui.exe`、`Qt6Core.dll`、`platforms\qwindows.dll`，有就直接安装；
+3. 没有产物时检查 `g++` / `qmake6` / `mingw32-make` / `windeployqt`；
+4. 缺依赖时询问是否自动安装 MSYS2 + GCC + Qt6（通过 winget + pacman，约 1 GB）；也可直接用 `install.bat -InstallDeps`；
+5. 自动编译，复制程序与 Qt 运行库到 `%LOCALAPPDATA%\MoJi\bin`；
+6. 写入用户 PATH，创建开始菜单快捷方式；
+7. 运行 `moji.exe --version` 自检。
+
+常用参数：
+
+```bat
+install.bat -Yes           :: 不询问，能装就装
+install.bat -NoBuild       :: 只用现有 build\ 产物
+install.bat -Desktop       :: 额外创建桌面快捷方式
+install.bat -InstallDeps   :: 允许自动安装 MSYS2/Qt6
+```
+
+卸载：
+
+```bat
+uninstall.bat              :: 删除程序、PATH、快捷方式，保留数据
+uninstall.bat -PurgeData   :: 连 %USERPROFILE%\.moji 一起删除
+```
+
+**方式二：图形安装包**
+
+`MoJi-Setup-1.0.0.exe` 是 Inno Setup 生成的标准安装包：
+
+- 安装到 `%LOCALAPPDATA%\Programs\MoJi`（无需管理员）；
+- 自动生成 `unins000.exe` 卸载程序，并出现在「应用和功能」；
+- 可选桌面快捷方式、可选加入用户 PATH；
+- 包含 TUI、Qt GUI、C89 基础版、文档与截图。
+
+重新生成安装包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1
+```
+
+脚本会按需编译程序、调用 Inno Setup 6，并把 `MoJi-Setup-1.0.0.exe` 复制到 `D:\程序设计`。
+
+**方式三：便携 zip**
 
 `package.ps1` 可生成便携 zip：`dist\moji-cpp-1.0.0.zip`。
 
