@@ -229,6 +229,7 @@ QString markdown_to_html(const QString& markdown, bool dark, int font_px) {
                "del{color:%4;}"
                "img{border-radius:8px;margin:6px 0;}"
                "mark{border-radius:3px;padding:0 2px;}"
+               "p,li,td,blockquote{color:%2;margin:6px 0;}"
                "p{margin:6px 0;}"
                "a{color:#4f6ef7;}"
                "code{background:%5;color:%2;font-family:Consolas,monospace;padding:1px 4px;}"

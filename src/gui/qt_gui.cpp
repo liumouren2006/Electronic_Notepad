@@ -58,6 +58,9 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QImageReader>
+#include <QMovie>
+#include <QComboBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -1093,6 +1096,231 @@ private:
     SketchCanvas* canvas_ = nullptr;
 };
 
+// ---------------------------------------------------------------- Logo 裁剪/缩放
+struct LogoTransform {
+    double zoom = 1.0;
+    int dx = 0;
+    int dy = 0;
+    QString shape = "rounded";
+};
+
+QPainterPath logo_shape_path(const QRectF& r, const QString& shape) {
+    QPainterPath path;
+    if (shape == "circle") {
+        path.addEllipse(r);
+    } else if (shape == "square") {
+        path.addRect(r);
+    } else if (shape == "hexagon") {
+        QPolygonF poly;
+        const double cx = r.center().x(), cy = r.center().y();
+        const double rx = r.width() / 2.0, ry = r.height() / 2.0;
+        for (int i = 0; i < 6; ++i) {
+            double a = M_PI / 6.0 + i * M_PI / 3.0;
+            poly << QPointF(cx + rx * std::cos(a), cy + ry * std::sin(a));
+        }
+        path.addPolygon(poly);
+        path.closeSubpath();
+    } else {
+        qreal radius = std::min(r.width(), r.height()) * 0.32;
+        path.addRoundedRect(r, radius, radius);
+    }
+    return path;
+}
+
+LogoTransform parse_logo_transform(const QString& raw) {
+    LogoTransform t;
+    if (raw.isEmpty()) return t;
+    try {
+        json j = json::parse(raw.toStdString());
+        t.zoom = j.value("zoom", 1.0);
+        t.dx = j.value("dx", 0);
+        t.dy = j.value("dy", 0);
+        t.shape = QString::fromStdString(j.value("shape", std::string("rounded")));
+    } catch (...) {
+    }
+    t.zoom = std::max(0.5, std::min(4.0, t.zoom));
+    return t;
+}
+
+QString logo_transform_json(const LogoTransform& t) {
+    json j;
+    j["zoom"] = t.zoom;
+    j["dx"] = t.dx;
+    j["dy"] = t.dy;
+    j["shape"] = t.shape.toStdString();
+    return QString::fromStdString(j.dump());
+}
+
+class LogoPreview : public QWidget {
+public:
+    explicit LogoPreview(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumSize(220, 220);
+        setMouseTracking(true);
+    }
+    void set_image(const QImage& image) {
+        image_ = image;
+        update();
+    }
+    LogoTransform transform() const { return t_; }
+    void set_transform(const LogoTransform& t) {
+        t_ = t;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillRect(rect(), QColor("#eef1f8"));
+        QRectF box(8, 8, width() - 16, height() - 16);
+        painter.setClipPath(logo_shape_path(box, t_.shape));
+        if (image_.isNull()) {
+            painter.setPen(QColor("#8b93a7"));
+            painter.drawText(box, Qt::AlignCenter, "选择一张图片");
+            return;
+        }
+        double base = std::max(box.width() / image_.width(), box.height() / image_.height());
+        double scale = base * t_.zoom;
+        QSizeF size(image_.width() * scale, image_.height() * scale);
+        QRectF target(box.center().x() - size.width() / 2 + t_.dx,
+                      box.center().y() - size.height() / 2 + t_.dy,
+                      size.width(), size.height());
+        painter.drawImage(target, image_);
+    }
+    void mousePressEvent(QMouseEvent* e) override {
+        if (e->button() == Qt::LeftButton) {
+            drag_ = true;
+            last_ = e->pos();
+        }
+    }
+    void mouseMoveEvent(QMouseEvent* e) override {
+        if (!drag_) return;
+        t_.dx += e->pos().x() - last_.x();
+        t_.dy += e->pos().y() - last_.y();
+        last_ = e->pos();
+        update();
+    }
+    void mouseReleaseEvent(QMouseEvent*) override { drag_ = false; }
+    void wheelEvent(QWheelEvent* e) override {
+        double step = e->angleDelta().y() > 0 ? 1.08 : 0.92;
+        t_.zoom = std::max(0.5, std::min(4.0, t_.zoom * step));
+        update();
+        e->accept();
+    }
+
+private:
+    QImage image_;
+    LogoTransform t_;
+    bool drag_ = false;
+    QPoint last_;
+};
+
+class LogoEditorDialog : public QDialog {
+public:
+    LogoEditorDialog(QWidget* parent, const QString& path, const LogoTransform& t)
+        : QDialog(parent), path_(path), t_(t) {
+        setWindowTitle("编辑 Logo");
+        setModal(true);
+        auto* lay = new QVBoxLayout(this);
+        lay->setContentsMargins(18, 16, 18, 14);
+        lay->setSpacing(10);
+
+        preview_ = new LogoPreview(this);
+        preview_->set_transform(t_);
+        lay->addWidget(preview_);
+
+        auto* shape_row = new QHBoxLayout();
+        shape_row->addWidget(new QLabel("边框形状", this));
+        shape_ = new QComboBox(this);
+        shape_->addItem("圆角矩形", "rounded");
+        shape_->addItem("圆形", "circle");
+        shape_->addItem("方形", "square");
+        shape_->addItem("六边形", "hexagon");
+        int idx = shape_->findData(t_.shape);
+        shape_->setCurrentIndex(idx < 0 ? 0 : idx);
+        connect(shape_, &QComboBox::currentIndexChanged, this, [this](int) {
+            auto t = preview_->transform();
+            t.shape = shape_->currentData().toString();
+            preview_->set_transform(t);
+        });
+        shape_row->addWidget(shape_, 1);
+        lay->addLayout(shape_row);
+
+        auto* zoom_row = new QHBoxLayout();
+        zoom_row->addWidget(new QLabel("缩放", this));
+        zoom_ = new QSlider(Qt::Horizontal, this);
+        zoom_->setRange(50, 400);
+        zoom_->setValue((int)(t_.zoom * 100));
+        auto* zoom_label = new QLabel(QString::number(zoom_->value()) + "%", this);
+        connect(zoom_, &QSlider::valueChanged, this, [this, zoom_label](int v) {
+            zoom_label->setText(QString::number(v) + "%");
+            auto t = preview_->transform();
+            t.zoom = v / 100.0;
+            preview_->set_transform(t);
+        });
+        zoom_row->addWidget(zoom_, 1);
+        zoom_row->addWidget(zoom_label);
+        lay->addLayout(zoom_row);
+
+        auto* hint = new QLabel("在预览里拖动可平移，滚轮缩放；GIF 会保留为动图。", this);
+        hint->setProperty("role", "muted");
+        lay->addWidget(hint);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        buttons->button(QDialogButtonBox::Ok)->setText("确定");
+        buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+        auto* choose = buttons->addButton("选择图片…", QDialogButtonBox::ActionRole);
+        auto* reset = buttons->addButton("重置", QDialogButtonBox::ResetRole);
+        connect(choose, &QPushButton::clicked, this, [this] {
+            QString path = QFileDialog::getOpenFileName(
+                this, "选择 Logo 图片", path_,
+                "图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg *.ico)");
+            if (path.isEmpty()) return;
+            QImageReader reader(path);
+            QImage img = reader.read();
+            if (img.isNull()) {
+                QMessageBox::warning(this, "无法读取", "这个文件无法作为图片打开。");
+                return;
+            }
+            path_ = path;
+            preview_->set_image(img);
+            auto t = preview_->transform();
+            t.zoom = 1.0;
+            t.dx = 0;
+            t.dy = 0;
+            preview_->set_transform(t);
+            zoom_->setValue(100);
+        });
+        connect(reset, &QPushButton::clicked, this, [this] {
+            auto t = preview_->transform();
+            t.zoom = 1.0;
+            t.dx = 0;
+            t.dy = 0;
+            preview_->set_transform(t);
+            zoom_->setValue(100);
+        });
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        lay->addWidget(buttons);
+
+        if (!path_.isEmpty()) {
+            QImageReader reader(path_);
+            QImage img = reader.read();
+            if (!img.isNull()) preview_->set_image(img);
+        }
+    }
+
+    QString path() const { return path_; }
+    LogoTransform transform() const { return preview_->transform(); }
+
+private:
+    QString path_;
+    LogoTransform t_;
+    LogoPreview* preview_ = nullptr;
+    QComboBox* shape_ = nullptr;
+    QSlider* zoom_ = nullptr;
+};
+
 // ---------------------------------------------------------------- 独立页面窗口
 class DetachedPageWindow : public QMainWindow {
 public:
@@ -1149,6 +1377,7 @@ private:
 
         page_ = new PageEditor(repo_, panel);
         page_->set_read_only(true);
+        page_->set_dark(dark_);
         page_->set_event(event);
         layout->addWidget(page_, 1);
 
@@ -1206,12 +1435,11 @@ private:
         caption->setProperty("role", "h3");
         header->addWidget(caption);
         header->addStretch(1);
-        auto* cancel = new QPushButton("取消", panel);
+        auto* cancel = new QPushButton("↺", panel);
         cancel->setObjectName("Ghost");
-        connect(cancel, &QPushButton::clicked, this, [this] {
-            if (Event* e = repo_.find(event_id_.toStdString())) load_into_editor(e);
-            show_view();
-        });
+        cancel->setFixedSize(34, 30);
+        cancel->setToolTip("取消修改并还原");
+        connect(cancel, &QPushButton::clicked, this, [this] { cancel_editor(); });
         auto* save = new QPushButton("保存", panel);
         save->setObjectName("Ghost");
         connect(save, &QPushButton::clicked, this, [this] { save_editor(false); });
@@ -1444,19 +1672,61 @@ private:
     }
 
     void show_view() {
+        editing_ = false;
         refresh_page();
         if (stack_) stack_->setCurrentIndex(0);
     }
 
     void show_editor() {
-        if (Event* e = repo_.find(event_id_.toStdString())) load_into_editor(e);
+        if (Event* e = repo_.find(event_id_.toStdString())) {
+            if (!editing_) {
+                edit_snapshot_ = *e;
+                snapshot_valid_ = true;
+                editing_ = true;
+            }
+            load_into_editor(e);
+        }
         if (stack_) stack_->setCurrentIndex(1);
+    }
+
+    // 取消：把事项还原到进入编辑前的快照。
+    void cancel_editor() {
+        if (!snapshot_valid_) {
+            editing_ = false;
+            show_view();
+            return;
+        }
+        Event snap = edit_snapshot_;
+        try {
+            Event* e = repo_.find(event_id_.toStdString());
+            if (e) {
+                int old_priority = e->priority;
+                repo_.update(event_id_.toStdString(), snap.title, snap.note, snap.due,
+                             snap.tags, snap.remind_before, snap.color, snap.icon,
+                             snap.page_layout, snap.system_notify);
+                repo_.set_ringtone(event_id_.toStdString(), snap.ringtone);
+                repo_.set_snooze(event_id_.toStdString(), snap.snooze_until);
+                repo_.set_done(event_id_.toStdString(), snap.done);
+                if (snap.priority != old_priority) {
+                    repo_.move_to(event_id_.toStdString(), snap.priority);
+                }
+            }
+        } catch (...) {
+        }
+        editing_ = false;
+        snapshot_valid_ = false;
+        if (Event* e = repo_.find(event_id_.toStdString())) load_into_editor(e);
+        show_view();
+        if (on_saved) on_saved(event_id_);
     }
 
     Repository& repo_;
     QString event_id_;
     bool dark_ = false;
     bool loading_ = false;
+    bool editing_ = false;
+    bool snapshot_valid_ = false;
+    Event edit_snapshot_;
     int font_px_ = 0;
     QStackedWidget* stack_ = nullptr;
     QLabel* page_title_ = nullptr;
@@ -1494,6 +1764,8 @@ public:
         app_subtitle_ = QString::fromStdString(cfg_.value("app_subtitle", std::string("电子记事本")));
         brand_icon_ = QString::fromStdString(cfg_.value("brand_icon", std::string("")));
         brand_emoji_ = QString::fromStdString(cfg_.value("brand_emoji", std::string("墨")));
+        brand_transform_raw_ = QString::fromStdString(
+            cfg_.value("brand_icon_transform", std::string("")));
         opacity_percent_ = cfg_.value("opacity", 100);
         wallpaper_ = QString::fromStdString(cfg_.value("wallpaper", std::string("")));
         acrylic_ = cfg_.value("acrylic", false);
@@ -1588,6 +1860,17 @@ public:
 
     void debug_close_detail() { close_detail(); }
 
+    // 自动化测试：进入编辑、改动标题并模拟自动保存，再点“取消”，应还原标题。
+    void debug_cancel_test() {
+        debug_click_first();
+        Event* e = current();
+        if (!e) return;
+        load_editor(e);
+        title_edit_->setText("CANCEL_TEST_TITLE");
+        save_current();
+        cancel_edit_changes();
+    }
+
     // 自动化测试/截图用：模拟 Ctrl（或 Ctrl+Shift）连选
     void select_test_multiple(int count, bool shift) {
         auto events = visible_events();
@@ -1660,7 +1943,16 @@ private:
         auto* side = new QFrame(this);
         side->setObjectName("Sidebar");
         side->setFixedWidth(252);
-        auto* layout = new QVBoxLayout(side);
+        // 侧栏内容放进滚动区：窗口很矮时滚动，而不是让统计卡互相遮挡。
+        auto* outer = new QVBoxLayout(side);
+        outer->setContentsMargins(0, 0, 0, 0);
+        auto* scroll = new QScrollArea(side);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto* content = new QWidget(scroll);
+        content->setObjectName("SidebarContent");
+        auto* layout = new QVBoxLayout(content);
         layout->setContentsMargins(18, 20, 18, 16);
         layout->setSpacing(10);
 
@@ -1771,6 +2063,9 @@ private:
         local->setProperty("role", "muted");
         local->setStyleSheet("font-size:9pt;");
         layout->addWidget(local);
+        layout->addStretch(1);
+        scroll->setWidget(content);
+        outer->addWidget(scroll);
         return side;
     }
 
@@ -1926,9 +2221,20 @@ private:
         auto* edit_header = new QHBoxLayout();
         auto* edit_label = new QLabel("编辑记事", panel);
         edit_label->setProperty("role", "h3");
-        auto* finish = new QPushButton(mdl(0xE73E), panel);
+        auto* cancel_edit = new QPushButton("↺", panel);
+        cancel_edit->setObjectName("Ghost");
+        cancel_edit->setFixedSize(34, 32);
+        cancel_edit->setToolTip("取消修改并还原到编辑前");
+        cancel_edit->setCursor(Qt::PointingHandCursor);
+        connect(cancel_edit, &QPushButton::clicked, this, [this] { cancel_edit_changes(); });
+        auto* finish = new QPushButton("✓", panel);
         finish->setObjectName("Primary");
-        use_icon_font(finish, 11, true);
+        {
+            QFont f = finish->font();
+            f.setPointSize(13);
+            f.setBold(true);
+            finish->setFont(f);
+        }
         finish->setFixedSize(38, 32);
         finish->setCursor(Qt::PointingHandCursor);
         finish->setToolTip("保存并返回页面视图");
@@ -1942,6 +2248,7 @@ private:
         connect(close, &QPushButton::clicked, this, [this] { close_detail(); });
         edit_header->addWidget(edit_label);
         edit_header->addStretch(1);
+        edit_header->addWidget(cancel_edit);
         edit_header->addWidget(finish);
         edit_header->addWidget(close);
         layout->addLayout(edit_header);
@@ -2562,6 +2869,10 @@ private:
     }
 
     void load_event(Event* e, bool edit) {
+        if (edit && !editing_ && e && !edit_is_new_) {
+            edit_snapshot_ = *e;
+            edit_snapshot_valid_ = true;
+        }
         loading_ = true;
         if (!e) {
             loading_ = false;
@@ -2615,10 +2926,57 @@ private:
     }
 
     void load_editor(Event* e) { load_event(e, true); }
-    void load_view(Event* e) { load_event(e, false); }
+    void load_view(Event* e) {
+        edit_is_new_ = false;
+        edit_snapshot_valid_ = false;
+        load_event(e, false);
+    }
 
     void show_view_current() {
+        edit_is_new_ = false;
+        edit_snapshot_valid_ = false;
         if (Event* e = current()) load_view(e);
+    }
+
+    // 取消编辑：把事项还原到进入编辑前的快照（自动保存也可能已写盘，这里一并回滚）。
+    void cancel_edit_changes() {
+        if (current_id_.isEmpty()) {
+            close_detail();
+            return;
+        }
+        if (edit_is_new_) {
+            const QString id = current_id_;
+            repo_.remove(id.toStdString());
+            current_id_.clear();
+            selection_.clear();
+            refresh_list(true);
+            if (toast_) toast_->show_message("已取消新建", "", "↺", 1800);
+            return;
+        }
+        if (!edit_snapshot_valid_) {
+            show_view_current();
+            return;
+        }
+        const std::string id = current_id_.toStdString();
+        Event snap = edit_snapshot_;
+        try {
+            Event* e = repo_.find(id);
+            if (e) {
+                int old_priority = e->priority;
+                repo_.update(id, snap.title, snap.note, snap.due, snap.tags,
+                             snap.remind_before, snap.color, snap.icon,
+                             snap.page_layout, snap.system_notify);
+                repo_.set_ringtone(id, snap.ringtone);
+                repo_.set_snooze(id, snap.snooze_until);
+                repo_.set_done(id, snap.done);
+                if (snap.priority != old_priority) repo_.move_to(id, snap.priority);
+            }
+            refresh_list(false);
+            show_view_current();
+            if (toast_) toast_->show_message("已取消修改", "内容已还原", "↺", 2000);
+        } catch (const std::exception& ex) {
+            status_label_->setText(QString("还原失败：") + ex.what());
+        }
     }
 
     void apply_detail_sizes() {
@@ -2960,6 +3318,8 @@ private:
         search_edit_->blockSignals(false);
         nav_buttons_["all"]->setChecked(true);
         try {
+            edit_is_new_ = true;
+            edit_snapshot_valid_ = false;
             Event& e = repo_.add("新记事");
             current_id_ = qs(e.id);
             selection_.clear();
@@ -3255,35 +3615,68 @@ private:
 
     void apply_brand() {
         if (!brand_mark_) return;
+        if (brand_movie_) {
+            brand_movie_->stop();
+            delete brand_movie_;
+            brand_movie_ = nullptr;
+        }
+        brand_mark_->setMovie(nullptr);
+        brand_mark_->setPixmap(QPixmap());
+        brand_mark_->setText(QString());
+
         const QString icon = brand_icon_.trimmed();
+        LogoTransform t = parse_logo_transform(brand_transform_raw_);
         bool shown = false;
         if (!icon.isEmpty() && QFileInfo::exists(icon)) {
-            QPixmap src(icon);
-            if (!src.isNull()) {
-                QPixmap rounded(50, 50);
-                rounded.fill(Qt::transparent);
-                QPainter painter(&rounded);
-                painter.setRenderHint(QPainter::Antialiasing);
-                QPainterPath clip;
-                clip.addRoundedRect(0, 0, 50, 50, 16, 16);
-                painter.setClipPath(clip);
-                painter.drawPixmap(0, 0,
-                                   src.scaled(50, 50, Qt::KeepAspectRatioByExpanding,
-                                              Qt::SmoothTransformation));
-                painter.end();
-                brand_mark_->setPixmap(rounded);
-                brand_mark_->setText(QString());
+            const QString ext = QFileInfo(icon).suffix().toLower();
+            if (ext == "gif") {
+                brand_movie_ = new QMovie(icon, QByteArray(), brand_mark_);
+                if (brand_movie_->isValid()) {
+                    int side = std::max(20, (int)(50 * t.zoom));
+                    brand_movie_->setScaledSize(QSize(side, side));
+                    brand_mark_->setMovie(brand_movie_);
+                    brand_mark_->setAlignment(Qt::AlignCenter);
+                    brand_movie_->start();
+                    shown = true;
+                }
+            } else {
+                QImage img(icon);
+                if (!img.isNull()) {
+                    QPixmap canvas(50, 50);
+                    canvas.fill(Qt::transparent);
+                    QPainter painter(&canvas);
+                    painter.setRenderHint(QPainter::Antialiasing);
+                    painter.setClipPath(logo_shape_path(QRectF(0, 0, 50, 50), t.shape));
+                    double base = std::max(50.0 / img.width(), 50.0 / img.height());
+                    double scale = base * t.zoom;
+                    QSizeF size(img.width() * scale, img.height() * scale);
+                    QRectF target(25 - size.width() / 2 + t.dx,
+                                  25 - size.height() / 2 + t.dy,
+                                  size.width(), size.height());
+                    painter.drawImage(target, img);
+                    painter.end();
+                    brand_mark_->setPixmap(canvas);
+                    shown = true;
+                }
+            }
+            if (shown) {
                 brand_mark_->setStyleSheet("background:transparent;");
-                shown = true;
+                QRegion region(logo_shape_path(QRectF(0, 0, 50, 50), t.shape)
+                                   .toFillPolygon()
+                                   .toPolygon());
+                brand_mark_->setMask(region);
             }
         }
         if (!shown && !brand_emoji_.trimmed().isEmpty()) {
+            brand_mark_->clearMask();
             brand_mark_->setPixmap(QPixmap());
+            brand_mark_->setMovie(nullptr);
             brand_mark_->setText(brand_emoji_);
             brand_mark_->setStyleSheet(QString());
             shown = true;
         }
-        brand_mark_->setVisible(shown);
+        if (!shown) brand_mark_->setVisible(false);
+        else brand_mark_->setVisible(true);
         if (brand_title_) {
             brand_title_->setText(app_name_);
             brand_title_->setVisible(!app_name_.isEmpty());
@@ -3378,6 +3771,7 @@ private:
     }
 
     void open_settings() {
+        logo_transform_edit_ = brand_transform_raw_;
         QDialog dlg(this);
         dlg.setWindowTitle("设置");
         dlg.setMinimumWidth(520);
@@ -3408,12 +3802,28 @@ private:
         auto* icon_path = new QLineEdit(brand_icon_, &dlg);
         icon_path->setPlaceholderText("或选择一张图片（优先于字符）");
         auto* pick_icon = new QPushButton("选择图片", &dlg);
+        auto* adjust_icon = new QPushButton("调整…", &dlg);
         auto* clear_icon = new QPushButton("清除", &dlg);
         connect(pick_icon, &QPushButton::clicked, &dlg, [&] {
-            QString path = QFileDialog::getOpenFileName(
-                &dlg, "选择 Logo 图片", icon_path->text(),
-                "图片 (*.png *.jpg *.jpeg *.bmp *.ico *.svg)");
-            if (!path.isEmpty()) icon_path->setText(path);
+            LogoEditorDialog editor(&dlg, icon_path->text(),
+                                    parse_logo_transform(logo_transform_edit_));
+            if (editor.exec() == QDialog::Accepted) {
+                icon_path->setText(editor.path());
+                logo_transform_edit_ = logo_transform_json(editor.transform());
+                emoji_edit->clear();
+            }
+        });
+        connect(adjust_icon, &QPushButton::clicked, &dlg, [&] {
+            if (icon_path->text().trimmed().isEmpty()) {
+                QMessageBox::information(&dlg, "提示", "请先选择一张 Logo 图片。");
+                return;
+            }
+            LogoEditorDialog editor(&dlg, icon_path->text(),
+                                    parse_logo_transform(logo_transform_edit_));
+            if (editor.exec() == QDialog::Accepted) {
+                icon_path->setText(editor.path());
+                logo_transform_edit_ = logo_transform_json(editor.transform());
+            }
         });
         connect(clear_icon, &QPushButton::clicked, &dlg, [&] {
             icon_path->clear();
@@ -3422,6 +3832,7 @@ private:
         icon_row->addWidget(emoji_edit);
         icon_row->addWidget(icon_path, 1);
         icon_row->addWidget(pick_icon);
+        icon_row->addWidget(adjust_icon);
         icon_row->addWidget(clear_icon);
         lay->addLayout(icon_row);
 
@@ -3525,6 +3936,7 @@ private:
         app_subtitle_ = sub_edit->text().trimmed();
         brand_emoji_ = emoji_edit->text();
         brand_icon_ = icon_path->text().trimmed();
+        brand_transform_raw_ = logo_transform_edit_;
         note_font_px_ = font_spin->value();
         opacity_percent_ = opacity_slider->value();
         wallpaper_ = wall_edit->text().trimmed();
@@ -3537,6 +3949,7 @@ private:
         cfg["app_subtitle"] = app_subtitle_.toStdString();
         cfg["brand_emoji"] = brand_emoji_.toStdString();
         cfg["brand_icon"] = brand_icon_.toStdString();
+        cfg["brand_icon_transform"] = brand_transform_raw_.toStdString();
         cfg["note_font_size"] = note_font_px_;
         cfg["opacity"] = opacity_percent_;
         cfg["wallpaper"] = wallpaper_.toStdString();
@@ -3804,6 +4217,9 @@ private:
     QSystemTrayIcon* tray_ = nullptr;
     QWidget* root_widget_ = nullptr;
     QLabel* brand_mark_ = nullptr;
+    QMovie* brand_movie_ = nullptr;
+    QString brand_transform_raw_;
+    QString logo_transform_edit_;
     QLabel* brand_title_ = nullptr;
     QLabel* brand_sub_ = nullptr;
     QHBoxLayout* brand_row_ = nullptr;
@@ -3819,6 +4235,9 @@ private:
     bool reminder_open_ = false;
     QString current_event_ringtone_;
     QPushButton* ringtone_button_ = nullptr;
+    Event edit_snapshot_;
+    bool edit_snapshot_valid_ = false;
+    bool edit_is_new_ = false;
     QTimer* save_timer_ = nullptr;
     QTimer* search_timer_ = nullptr;
     QTimer* relative_timer_ = nullptr;
@@ -3858,6 +4277,7 @@ int run_qt_gui(int argc, char** argv) {
         const QString open = qEnvironmentVariable("MOJI_GUI_OPEN");
         if (!open.isEmpty()) window.debug_open_first(open == "edit");
         if (qEnvironmentVariableIsSet("MOJI_GUI_CLICK")) window.debug_click_first();
+        if (qEnvironmentVariableIsSet("MOJI_GUI_CANCEL")) window.debug_cancel_test();
         QWidget* detached = nullptr;
         if (qEnvironmentVariableIsSet("MOJI_GUI_DETACH")) detached = window.debug_detach_first();
         const int multi = qEnvironmentVariableIntValue("MOJI_GUI_MULTI");
