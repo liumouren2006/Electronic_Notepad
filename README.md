@@ -113,7 +113,7 @@ bash build.sh
 ```
 build\moji.exe       控制台版：CLI / TUI / GUI（moji gui）
 build\moji-gui.exe   窗口版 Qt GUI（旁边带 Qt 运行库，双击即用）
-build\test_core.exe  C++ 核心测试（70 个检查）
+build\test_core.exe  C++ 核心测试（79 个检查）
 ```
 
 ### 安装到系统
@@ -413,7 +413,7 @@ int run_qt_gui(int argc, char** argv);                                        //
 build\test_core.exe
 ```
 
-输出：`checks=70 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
+输出：`checks=79 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
 
 UI 验证：TUI 已在 ConPTY 中实测新增/编辑/勾选/调序/撤销/退出；Qt GUI 通过 `--screenshot` 离屏渲染浅色/深色截图，并在去掉 MSYS2 PATH 的环境下验证 `moji-gui.exe` + Qt 运行库可独立启动；`moji.exe gui` 启动器也已验证。
 

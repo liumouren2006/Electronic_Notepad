@@ -3,6 +3,8 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <algorithm>
+
 namespace moji {
 
 namespace {
@@ -51,7 +53,7 @@ QStringList table_cells(const QString& line) {
 
 }  // namespace
 
-QString markdown_to_html(const QString& markdown, bool dark) {
+QString markdown_to_html(const QString& markdown, bool dark, int font_px) {
     QString text = markdown;
     text.replace("\r\n", "\n");
     text.replace('\r', '\n');
@@ -219,8 +221,14 @@ QString markdown_to_html(const QString& markdown, bool dark) {
     return QString(
                "<html><head><style>"
                "body{background:%1;color:%2;font-family:'Microsoft YaHei UI',sans-serif;"
-               "font-size:14px;line-height:1.55;}"
-               "h1,h2,h3,h4,h5,h6{color:%2;margin:14px 0 8px;}"
+               "font-size:%8px;line-height:1.6;}"
+               "h1{color:%2;font-size:1.65em;margin:16px 0 10px;}"
+               "h2{color:%2;font-size:1.38em;margin:14px 0 8px;}"
+               "h3{color:%2;font-size:1.18em;margin:12px 0 6px;}"
+               "h4,h5,h6{color:%2;font-size:1.05em;margin:10px 0 6px;}"
+               "del{color:%4;}"
+               "img{border-radius:8px;margin:6px 0;}"
+               "mark{border-radius:3px;padding:0 2px;}"
                "p{margin:6px 0;}"
                "a{color:#4f6ef7;}"
                "code{background:%5;color:%2;font-family:Consolas,monospace;padding:1px 4px;}"
@@ -232,7 +240,8 @@ QString markdown_to_html(const QString& markdown, bool dark) {
                "ul,ol{margin:6px 0 6px 22px;}"
                "hr{border:none;border-top:1px solid %3;}"
                "</style></head><body>%7</body></html>")
-        .arg(bg, fg, border, muted, codebg, thbg, body);
+        .arg(bg, fg, border, muted, codebg, thbg, body)
+        .arg(std::max(9, font_px));
 }
 
 }  // namespace moji

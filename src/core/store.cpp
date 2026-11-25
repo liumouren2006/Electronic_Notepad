@@ -222,6 +222,15 @@ json Store::load_config() const {
     cfg["window"] = json{{"w", 1280}, {"h", 820}};
     cfg["ringtone"] = "";
     cfg["accent"] = "#4f6ef7";
+    cfg["volume"] = 100;
+    cfg["note_font_size"] = 0;       // 0 = 跟随界面默认
+    cfg["app_name"] = "墨记 MoJi";
+    cfg["app_subtitle"] = "电子记事本";
+    cfg["brand_icon"] = "";          // 空 = 使用内置“墨”字块；可填图片路径
+    cfg["brand_emoji"] = "墨";       // brand_icon 为空时显示的字/表情，留空则隐藏
+    cfg["opacity"] = 100;            // 窗口不透明度百分比
+    cfg["wallpaper"] = "";           // 壁纸图片路径
+    cfg["acrylic"] = false;          // Windows 11 亚克力背景
     bool ok = false;
     std::string text = read_file(config_path, &ok);
     if (ok && !trim(text).empty()) {

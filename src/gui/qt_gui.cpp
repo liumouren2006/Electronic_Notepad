@@ -22,6 +22,10 @@
 #include <QDateTimeEdit>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QSlider>
+#include <QSpinBox>
+#include <QComboBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -31,6 +35,7 @@
 #include <QTextBrowser>
 #include <QSet>
 #include <QFileIconProvider>
+#include <QDir>
 #include <QFileInfo>
 #include <QFont>
 #include <QFontMetrics>
@@ -54,6 +59,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QProgressBar>
 #include <QPropertyAnimation>
@@ -74,6 +80,16 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -114,6 +130,20 @@ fs::path fspath(const QString& s) {
 #endif
 }
 QString clock_text(std::time_t t) { return qs(clock_str(t)); }
+
+// Segoe MDL2 Assets：Windows 自带的界面图标字体，比 emoji 更适合工具栏按钮。
+QString mdl(char16_t code) { return QString(QChar(code)); }
+void use_icon_font(QWidget* widget, int pt = 11, bool bold = false) {
+    // 全局 QSS 的 `* { font-family: ... }` 会覆盖 setFont，所以同时写进控件样式表。
+    QFont f("Segoe MDL2 Assets");
+    f.setPointSize(pt);
+    f.setBold(bold);
+    widget->setFont(f);
+    widget->setStyleSheet(widget->styleSheet() +
+                          QString("font-family:'Segoe MDL2 Assets';font-size:%1pt;")
+                              .arg(pt));
+}
+
 // ---------------------------------------------------------------- 配色与 QSS
 struct Pal {
     QString bg, surface, surfaceAlt, surfaceHover;
@@ -209,8 +239,8 @@ QLabel[role="statValue"] { font-size: 19px; font-weight: 700; }
 QLabel[role="statCaption"] { font-size: 10px; color: @{muted}; }
 
 QFrame#StatCard { background: @{surfaceAlt}; border-radius: 12px; }
-QFrame#BrandMark { background: @{primary}; border-radius: 16px; }
-QLabel#BrandMarkText { color: #ffffff; font-size: 28px; font-weight: 700; }
+QLabel#BrandMark { background: @{primary}; border-radius: 16px; }
+QLabel#BrandMarkText { color: #ffffff; font-size: 28px; font-weight: 700; background: transparent; }
 
 QPushButton {
     background: @{surfaceAlt};
@@ -613,6 +643,124 @@ private:
     QLabel* value_ = nullptr;
 };
 
+// ---------------------------------------------------------------- MD 风格取色器
+class ModernColorDialog : public QDialog {
+public:
+    static QColor pick(QWidget* parent, const QColor& initial, const QString& title) {
+        ModernColorDialog dlg(parent, initial, title);
+        if (dlg.exec() != QDialog::Accepted) return QColor();
+        return dlg.color_;
+    }
+
+    ModernColorDialog(QWidget* parent, const QColor& initial, const QString& title)
+        : QDialog(parent), color_(initial.isValid() ? initial : QColor("#4f6ef7")) {
+        setWindowTitle(title);
+        setModal(true);
+        setMinimumWidth(360);
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(18, 16, 18, 14);
+        layout->setSpacing(10);
+
+        auto* caption = new QLabel("选择颜色", this);
+        caption->setProperty("role", "h3");
+        layout->addWidget(caption);
+
+        // 圆角色块矩阵（Material Design 常用色）
+        static const char* palette[] = {
+            "#ef5350", "#e91e63", "#9c27b0", "#673ab7", "#3f51b5", "#2196f3",
+            "#03a9f4", "#00bcd4", "#009688", "#4caf50", "#8bc34a", "#cddc39",
+            "#ffeb3b", "#ffc107", "#ff9800", "#ff5722", "#795548", "#607d8b",
+            "#f44336", "#ad1457", "#6a1b9a", "#4527a0", "#283593", "#1565c0",
+            "#0277bd", "#00838f", "#00695c", "#2e7d32", "#558b2f", "#9e9d24",
+            "#f9a825", "#ef6c00", "#d84315", "#4e342e", "#37474f", "#212121",
+            "#e57373", "#f06292", "#ba68c8", "#9575cd", "#7986cb", "#64b5f6",
+            "#4fc3f7", "#4dd0e1", "#4db6ac", "#81c784", "#aed581", "#dce775",
+            "#fff176", "#ffd54f", "#ffb74d", "#ff8a65", "#a1887f", "#90a4ae",
+        };
+        auto* grid = new QGridLayout();
+        grid->setSpacing(6);
+        int index = 0;
+        for (const char* hex : palette) {
+            auto* swatch = new QPushButton(this);
+            swatch->setFixedSize(40, 26);
+            swatch->setCursor(Qt::PointingHandCursor);
+            swatch->setToolTip(hex);
+            swatch->setStyleSheet(QString(
+                "QPushButton{background:%1;border:1px solid rgba(0,0,0,0.12);"
+                "border-radius:8px;}"
+                "QPushButton:hover{border:2px solid #4f6ef7;}").arg(hex));
+            QColor c(hex);
+            connect(swatch, &QPushButton::clicked, this, [this, c] {
+                color_ = c;
+                refresh_preview();
+            });
+            grid->addWidget(swatch, index / 9, index % 9);
+            ++index;
+        }
+        layout->addLayout(grid);
+
+        auto* hex_row = new QHBoxLayout();
+        auto* label = new QLabel("自定义", this);
+        label->setProperty("role", "muted");
+        hex_edit_ = new QLineEdit(color_.name(), this);
+        hex_edit_->setPlaceholderText("#RRGGBB");
+        connect(hex_edit_, &QLineEdit::textChanged, this, [this](const QString& text) {
+            QColor c(text.trimmed());
+            if (c.isValid()) { color_ = c; refresh_preview(); }
+        });
+        auto* more = new QPushButton("更多颜色…", this);
+        connect(more, &QPushButton::clicked, this, [this] {
+            QColor c = QColorDialog::getColor(color_, this, "更多颜色",
+                                              QColorDialog::ShowAlphaChannel);
+            if (c.isValid()) {
+                color_ = c;
+                hex_edit_->setText(c.name());
+                refresh_preview();
+            }
+        });
+        hex_row->addWidget(label);
+        hex_row->addWidget(hex_edit_, 1);
+        hex_row->addWidget(more);
+        layout->addLayout(hex_row);
+
+        auto* preview_row = new QHBoxLayout();
+        auto* preview_label = new QLabel("预览", this);
+        preview_label->setProperty("role", "muted");
+        preview_ = new QLabel(this);
+        preview_->setFixedSize(120, 30);
+        preview_row->addWidget(preview_label);
+        preview_row->addWidget(preview_);
+        preview_row->addStretch(1);
+        layout->addLayout(preview_row);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        buttons->button(QDialogButtonBox::Ok)->setText("确定");
+        buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        layout->addWidget(buttons);
+
+        refresh_preview();
+    }
+
+private:
+    void refresh_preview() {
+        if (!preview_) return;
+        preview_->setStyleSheet(QString(
+            "background:%1;border-radius:10px;border:1px solid rgba(0,0,0,0.15);")
+            .arg(color_.name()));
+        if (hex_edit_ && hex_edit_->text().compare(color_.name(), Qt::CaseInsensitive) != 0) {
+            hex_edit_->blockSignals(true);
+            hex_edit_->setText(color_.name());
+            hex_edit_->blockSignals(false);
+        }
+    }
+
+    QColor color_;
+    QLineEdit* hex_edit_ = nullptr;
+    QLabel* preview_ = nullptr;
+};
+
 // ---------------------------------------------------------------- Toast
 class Toast : public QFrame {
 public:
@@ -965,6 +1113,15 @@ public:
 
     std::function<void(const QString&)> on_saved;
 
+    void set_note_font(int px) {
+        font_px_ = px;
+        if (note_edit_) note_edit_->setStyleSheet(QString("QTextEdit#NoteEdit{font-size:%1px;}").arg(px));
+        if (preview_) preview_->setStyleSheet(QString("QTextBrowser#Preview{font-size:%1px;}").arg(px));
+        if (page_editor_) page_editor_->set_text_font(px);
+    }
+
+    int effective_font_px() const { return font_px_ > 0 ? font_px_ : 14; }
+
 private:
     QWidget* build_page(Event* event) {
         auto* panel = new QFrame(this);
@@ -1113,7 +1270,9 @@ private:
         layout->addLayout(tags_row);
 
         auto* actions = new QHBoxLayout();
-        done_button_ = new QPushButton("标记完成", panel);
+        done_button_ = new QPushButton(mdl(0xE73E), panel);
+        done_button_->setFixedSize(34, 30);
+        use_icon_font(done_button_, 11);
         done_button_->setObjectName("Ghost");
         connect(done_button_, &QPushButton::clicked, this, [this] {
             if (repo_.find(event_id_.toStdString())) {
@@ -1139,14 +1298,45 @@ private:
         preview_ = new QTextBrowser(tabs_);
         preview_->setObjectName("Preview");
         preview_->setOpenExternalLinks(true);
+        page_editor_ = new PageEditor(repo_, tabs_);
+        page_editor_->set_dark(dark_);
+        page_editor_->on_add_image = [this] {
+            QStringList files = QFileDialog::getOpenFileNames(
+                this, "添加图片", QString(), "图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp)");
+            for (const QString& f : files) {
+                try {
+                    repo_.add_attachment(event_id_.toStdString(), fspath(f));
+                } catch (...) {
+                }
+            }
+            if (Event* e2 = repo_.find(event_id_.toStdString())) {
+                page_editor_->refresh_images(e2);
+                load_into_editor(e2);
+            }
+        };
+        page_editor_->on_layout_changed = [this](const QString& layout) {
+            try {
+                repo_.set_visual(event_id_.toStdString(), std::nullopt, std::nullopt,
+                                 layout.toStdString());
+            } catch (...) {
+            }
+        };
         tabs_->addTab(note_edit_, "编辑");
         tabs_->addTab(preview_, "预览");
+        tabs_->addTab(page_editor_, "页面");
         connect(note_edit_, &QTextEdit::textChanged, this, [this] {
-            if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+            if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_, effective_font_px()));
+            if (page_editor_) page_editor_->set_note(note_edit_->toPlainText());
         });
         connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
             if (index == 1 && preview_) {
-                preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+                preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_, effective_font_px()));
+            }
+            if (index == 2 && page_editor_) {
+                if (Event* e2 = repo_.find(event_id_.toStdString())) {
+                    page_editor_->set_dark(dark_);
+                    page_editor_->set_event(e2);
+                }
             }
         });
         layout->addWidget(tabs_, 1);
@@ -1181,9 +1371,14 @@ private:
         priority_spin_->setMaximum(std::max(1, (int)repo_.events.size()));
         priority_spin_->setValue(e->priority);
         meta_label_->setText(meta_text(e));
-        done_button_->setText(e->done ? "取消完成" : "标记完成");
+        if (page_editor_) {
+            page_editor_->set_text_font(effective_font_px());
+            page_editor_->set_event(e);
+        }
+        done_button_->setText(mdl(e->done ? 0xE7A7 : 0xE73E));
+        done_button_->setToolTip(e->done ? "取消完成" : "标记完成");
         status_label_->setText("已保存 · " + clock_text(e->updated_at.value_or(now_time())));
-        if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_));
+        if (preview_) preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), dark_, effective_font_px()));
         loading_ = false;
     }
 
@@ -1262,6 +1457,7 @@ private:
     QString event_id_;
     bool dark_ = false;
     bool loading_ = false;
+    int font_px_ = 0;
     QStackedWidget* stack_ = nullptr;
     QLabel* page_title_ = nullptr;
     QLabel* page_meta_ = nullptr;
@@ -1279,6 +1475,7 @@ private:
     QTabWidget* tabs_ = nullptr;
     QTextEdit* note_edit_ = nullptr;
     QTextBrowser* preview_ = nullptr;
+    PageEditor* page_editor_ = nullptr;
 };
 
 // ---------------------------------------------------------------- 主窗口
@@ -1291,6 +1488,15 @@ public:
         accent_ = QColor(QString::fromStdString(cfg_.value("accent", std::string("#4f6ef7"))));
         if (!accent_.isValid()) accent_ = QColor("#4f6ef7");
         ringtone_ = QString::fromStdString(cfg_.value("ringtone", std::string("")));
+        volume_ = cfg_.value("volume", 100);
+        note_font_px_ = cfg_.value("note_font_size", 0);
+        app_name_ = QString::fromStdString(cfg_.value("app_name", std::string("墨记 MoJi")));
+        app_subtitle_ = QString::fromStdString(cfg_.value("app_subtitle", std::string("电子记事本")));
+        brand_icon_ = QString::fromStdString(cfg_.value("brand_icon", std::string("")));
+        brand_emoji_ = QString::fromStdString(cfg_.value("brand_emoji", std::string("墨")));
+        opacity_percent_ = cfg_.value("opacity", 100);
+        wallpaper_ = QString::fromStdString(cfg_.value("wallpaper", std::string("")));
+        acrylic_ = cfg_.value("acrylic", false);
         pal_ = theme_ == "dark" ? make_dark(accent_) : make_light(accent_);
         build_ui();
         build_menus();
@@ -1298,6 +1504,8 @@ public:
         refresh_list(true);
         toast_ = new Toast(this);
         if (!shot_mode_) setup_tray();
+        apply_note_font();
+        apply_window_style();
 
         save_timer_ = new QTimer(this);
         save_timer_->setSingleShot(true);
@@ -1326,8 +1534,9 @@ public:
         relative_timer_->start();
 
         if (!shot_mode_) {
+            // 500ms 轮询：保证在整点那一秒就响，而不是等下一个 30 秒周期。
             remind_timer_ = new QTimer(this);
-            remind_timer_->setInterval(30000);
+            remind_timer_->setInterval(500);
             connect(remind_timer_, &QTimer::timeout, this, [this] { check_reminders(); });
             remind_timer_->start();
             QTimer::singleShot(1000, this, [this] {
@@ -1428,6 +1637,7 @@ private:
     void build_ui() {
         auto* root = new QWidget(this);
         root->setObjectName("Root");
+        root_widget_ = root;
         auto* root_layout = new QHBoxLayout(root);
         root_layout->setContentsMargins(0, 0, 0, 0);
         root_layout->setSpacing(0);
@@ -1456,27 +1666,24 @@ private:
 
         auto* brand = new QHBoxLayout();
         brand->setSpacing(12);
-        auto* mark = new QFrame(side);
-        mark->setObjectName("BrandMark");
-        mark->setFixedSize(50, 50);
-        auto* ml = new QVBoxLayout(mark);
-        ml->setContentsMargins(0, 0, 0, 0);
-        auto* mark_text = new QLabel("墨", mark);
-        mark_text->setObjectName("BrandMarkText");
-        mark_text->setAlignment(Qt::AlignCenter);
-        ml->addWidget(mark_text);
-        brand->addWidget(mark);
+        brand_mark_ = new QLabel(side);
+        brand_mark_->setObjectName("BrandMark");
+        brand_mark_->setFixedSize(50, 50);
+        brand_mark_->setAlignment(Qt::AlignCenter);
+        brand->addWidget(brand_mark_);
         auto* titles = new QVBoxLayout();
         titles->setSpacing(0);
-        auto* t1 = new QLabel("墨记 MoJi", side);
-        t1->setProperty("role", "h1");
-        auto* t2 = new QLabel("电子记事本", side);
-        t2->setProperty("role", "muted");
-        titles->addWidget(t1);
-        titles->addWidget(t2);
+        brand_title_ = new QLabel(side);
+        brand_title_->setProperty("role", "h1");
+        brand_sub_ = new QLabel(side);
+        brand_sub_->setProperty("role", "muted");
+        titles->addWidget(brand_title_);
+        titles->addWidget(brand_sub_);
         brand->addLayout(titles);
         brand->addStretch(1);
         layout->addLayout(brand);
+        brand_row_ = brand;
+        apply_brand();
 
         auto* grid = new QGridLayout();
         grid->setHorizontalSpacing(8);
@@ -1719,8 +1926,10 @@ private:
         auto* edit_header = new QHBoxLayout();
         auto* edit_label = new QLabel("编辑记事", panel);
         edit_label->setProperty("role", "h3");
-        auto* finish = new QPushButton("完成", panel);
+        auto* finish = new QPushButton(mdl(0xE73E), panel);
         finish->setObjectName("Primary");
+        use_icon_font(finish, 11, true);
+        finish->setFixedSize(38, 32);
         finish->setCursor(Qt::PointingHandCursor);
         finish->setToolTip("保存并返回页面视图");
         connect(finish, &QPushButton::clicked, this, [this] {
@@ -1813,6 +2022,29 @@ private:
         notify_row->addStretch(1);
         layout->addLayout(notify_row);
 
+        auto* ring_row = new QHBoxLayout();
+        auto* ring_label = new QLabel("铃声", panel);
+        ring_label->setProperty("role", "muted");
+        ringtone_button_ = new QPushButton("跟随默认", panel);
+        ringtone_button_->setObjectName("Ghost");
+        ringtone_button_->setCursor(Qt::PointingHandCursor);
+        ringtone_button_->setToolTip("为这个事项单独选择铃声；留空使用设置里的默认铃声");
+        connect(ringtone_button_, &QPushButton::clicked, this, [this] { choose_event_ringtone(); });
+        auto* ring_clear = new QPushButton("✕", panel);
+        ring_clear->setObjectName("IconButton");
+        ring_clear->setToolTip("恢复使用默认铃声");
+        connect(ring_clear, &QPushButton::clicked, this, [this] {
+            current_event_ringtone_.clear();
+            update_ringtone_button();
+            if (!current_id_.isEmpty()) {
+                try { repo_.set_ringtone(current_id_.toStdString(), ""); } catch (...) {}
+            }
+        });
+        ring_row->addWidget(ring_label);
+        ring_row->addWidget(ringtone_button_, 1);
+        ring_row->addWidget(ring_clear);
+        layout->addLayout(ring_row);
+
         auto* tags_row = new QHBoxLayout();
         tags_edit_ = new QLineEdit(panel);
         tags_edit_->setPlaceholderText("标签：课程, 截止（逗号分隔）");
@@ -1833,43 +2065,36 @@ private:
         layout->addLayout(tags_row);
 
         auto* toolbar = new QHBoxLayout();
-        toolbar->setSpacing(6);
-        auto* save = new QPushButton("保存", panel);
-        save->setObjectName("Primary");
+        toolbar->setSpacing(4);
+        auto icon_button = [&](char16_t code, const QString& tip, const char* role,
+                               int pt = 11) {
+            auto* b = new QPushButton(mdl(code), panel);
+            b->setObjectName(role);
+            b->setToolTip(tip);
+            b->setCursor(Qt::PointingHandCursor);
+            b->setFixedSize(34, 30);
+            b->setStyleSheet("padding:0;");
+            use_icon_font(b, pt);
+            toolbar->addWidget(b);
+            return b;
+        };
+        auto* save = icon_button(0xE74E, "保存 (Ctrl+S)", "Primary");
         connect(save, &QPushButton::clicked, this, [this] { save_current(true); });
-        done_button_ = new QPushButton("标记完成", panel);
-        done_button_->setObjectName("Ghost");
+        done_button_ = icon_button(0xE73E, "标记完成 / 取消完成", "IconButton");
         connect(done_button_, &QPushButton::clicked, this, [this] { toggle_current(); });
-        auto* duplicate = new QPushButton("复制", panel);
-        duplicate->setObjectName("Ghost");
+        auto* duplicate = icon_button(0xE8C8, "复制任务", "IconButton");
         connect(duplicate, &QPushButton::clicked, this, [this] { duplicate_current(); });
-        auto* up = new QPushButton("↑", panel);
-        up->setObjectName("IconButton");
-        up->setToolTip("提高优先级");
+        auto* up = icon_button(0xE74A, "提高优先级", "IconButton");
         connect(up, &QPushButton::clicked, this, [this] { move_current(-1); });
-        auto* down = new QPushButton("↓", panel);
-        down->setObjectName("IconButton");
-        down->setToolTip("降低优先级");
+        auto* down = icon_button(0xE74B, "降低优先级", "IconButton");
         connect(down, &QPushButton::clicked, this, [this] { move_current(1); });
-        toolbar->addWidget(save);
-        toolbar->addWidget(done_button_);
-        toolbar->addWidget(duplicate);
-        toolbar->addWidget(up);
-        toolbar->addWidget(down);
         toolbar->addStretch(1);
-        auto* undo = new QPushButton("撤销", panel);
-        undo->setObjectName("Ghost");
-        undo->setToolTip("撤销应用操作 (Ctrl+Alt+Z)");
+        auto* undo = icon_button(0xE7A7, "撤销应用操作 (Ctrl+Alt+Z)", "IconButton");
         connect(undo, &QPushButton::clicked, this, [this] { undo_action(false); });
-        auto* redo = new QPushButton("重做", panel);
-        redo->setObjectName("Ghost");
+        auto* redo = icon_button(0xE7A6, "重做 (Ctrl+Alt+Y)", "IconButton");
         connect(redo, &QPushButton::clicked, this, [this] { undo_action(true); });
-        auto* del = new QPushButton("删除", panel);
-        del->setObjectName("Danger");
+        auto* del = icon_button(0xE74D, "删除任务", "Danger");
         connect(del, &QPushButton::clicked, this, [this] { delete_current(); });
-        toolbar->addWidget(undo);
-        toolbar->addWidget(redo);
-        toolbar->addWidget(del);
         layout->addLayout(toolbar);
 
         auto* note_header = new QHBoxLayout();
@@ -1878,13 +2103,15 @@ private:
         auto* note_hint = new QLabel("支持 Markdown · 可粘贴图片、拖入文件", panel);
         note_hint->setProperty("role", "muted");
         note_hint->setStyleSheet("font-size:9pt;");
-        auto* table = new QPushButton("插入表格", panel);
-        table->setObjectName("Ghost");
-        table->setStyleSheet("font-size:9pt;");
+        auto* table = new QPushButton(mdl(0xE80A), panel);
+        table->setObjectName("IconButton");
+        table->setToolTip("插入 Markdown 表格");
+        use_icon_font(table, 11);
         connect(table, &QPushButton::clicked, this, [this] { insert_table(); });
-        auto* sketch = new QPushButton("墨迹页", panel);
-        sketch->setObjectName("Ghost");
-        sketch->setStyleSheet("font-size:9pt;");
+        auto* sketch = new QPushButton(mdl(0xE70F), panel);
+        sketch->setObjectName("IconButton");
+        sketch->setToolTip("打开墨迹页（手写）");
+        use_icon_font(sketch, 11);
         connect(sketch, &QPushButton::clicked, this, [this] {
             if (note_tabs_) note_tabs_->setCurrentIndex(2);
             if (page_) page_->set_ink_mode(true);
@@ -1948,6 +2175,8 @@ private:
         preview_->setOpenExternalLinks(true);
 
         page_ = new PageEditor(repo_, note_tabs_);
+        page_->set_dark(theme_ == "dark");
+        page_->set_text_font(effective_font_px());
         page_->on_add_image = [this] { choose_attachments(); };
         page_->on_layout_changed = [this](const QString& json) {
             if (loading_ || current_id_.isEmpty()) return;
@@ -2098,6 +2327,10 @@ private:
         connect(act_detach, &QAction::triggered, this, [this] { detach_current_page(); });
         auto* act_close = view->addAction("关闭右侧页面");
         connect(act_close, &QAction::triggered, this, [this] { close_detail(); });
+        view->addSeparator();
+        auto* act_settings = view->addAction("设置…");
+        act_settings->setShortcut(QKeySequence("Ctrl+,"));
+        connect(act_settings, &QAction::triggered, this, [this] { open_settings(); });
         view->addSeparator();
         auto* act_accent = view->addAction("主题色…");
         connect(act_accent, &QAction::triggered, this, [this] { choose_accent(); });
@@ -2346,6 +2579,8 @@ private:
         }
         remind_spin_->setValue(e->remind_before);
         if (system_notify_check_) system_notify_check_->setChecked(e->system_notify);
+        current_event_ringtone_ = qs(e->ringtone);
+        update_ringtone_button();
         tags_edit_->setText(qs(join(e->tags, ", ")));
         current_color_ = qs(e->color);
         current_icon_ = qs(e->icon);
@@ -2369,7 +2604,8 @@ private:
         if (view_att_list_) fill_attachments(view_att_list_, e);
         if (view_att_panel_) view_att_panel_->setVisible(!e->attachments.empty());
         update_preview();
-        done_button_->setText(e->done ? "取消完成" : "标记完成");
+        done_button_->setText(mdl(e->done ? 0xE7A7 : 0xE73E));
+        done_button_->setToolTip(e->done ? "取消完成" : "标记完成");
         status_label_->setText("已保存 · " + clock_text(e->updated_at.value_or(now_time())));
         editing_ = edit;
         if (editor_stack_) editor_stack_->setCurrentIndex(edit ? 1 : 0);
@@ -2604,7 +2840,7 @@ private:
 
     void choose_color() {
         QColor initial(current_color_.isEmpty() ? pal_.primary : current_color_);
-        QColor chosen = QColorDialog::getColor(initial, this, "事项颜色");
+        QColor chosen = ModernColorDialog::pick(this, initial, "事项颜色");
         if (!chosen.isValid()) return;
         current_color_ = chosen.name();
         update_color_button();
@@ -2630,7 +2866,7 @@ private:
 
     void update_preview() {
         if (!preview_) return;
-        preview_->setHtml(markdown_to_html(note_edit_->toPlainText(), theme_ == "dark"));
+        preview_->setHtml(render_md(note_edit_->toPlainText()));
     }
 
     void wrap_note(const QString& prefix, const QString& suffix) {
@@ -2646,7 +2882,7 @@ private:
     }
 
     void wrap_note_color() {
-        QColor chosen = QColorDialog::getColor(QColor("#e11d48"), this, "文字颜色");
+        QColor chosen = ModernColorDialog::pick(this, QColor("#e11d48"), "文字颜色");
         if (!chosen.isValid()) return;
         wrap_note("{color:" + chosen.name() + "}", "{/color}");
     }
@@ -2657,6 +2893,30 @@ private:
             return;
         }
         QApplication::beep();
+    }
+
+    void update_ringtone_button() {
+        if (!ringtone_button_) return;
+        if (current_event_ringtone_.isEmpty()) {
+            ringtone_button_->setText("跟随默认");
+        } else {
+            ringtone_button_->setText(QFileInfo(current_event_ringtone_).fileName());
+        }
+    }
+
+    void choose_event_ringtone() {
+        QString path = QFileDialog::getOpenFileName(
+            this, "为此事项选择铃声", current_event_ringtone_,
+            "音频 (*.wav *.mp3 *.wma *.m4a *.aac *.flac *.ogg);;所有文件 (*.*)");
+        if (path.isEmpty()) return;
+        current_event_ringtone_ = path;
+        update_ringtone_button();
+        if (!current_id_.isEmpty()) {
+            try { repo_.set_ringtone(current_id_.toStdString(), path.toStdString()); } catch (...) {}
+        }
+        if (!play_ringtone(path.toStdString(), volume_, false)) {
+            toast_->show_message("无法播放该音频", "将回退为系统提示音", "🔔", 4000);
+        }
     }
 
     void choose_ringtone() {
@@ -2676,7 +2936,7 @@ private:
     }
 
     void choose_accent() {
-        QColor chosen = QColorDialog::getColor(accent_, this, "主题色");
+        QColor chosen = ModernColorDialog::pick(this, accent_, "主题色");
         if (!chosen.isValid()) return;
         accent_ = chosen;
         json cfg = repo_.store.load_config();
@@ -2986,11 +3246,317 @@ private:
         }
     }
 
+    // ---------- 个性化 ----------
+    int effective_font_px() const { return note_font_px_ > 0 ? note_font_px_ : 14; }
+
+    QString render_md(const QString& text) const {
+        return markdown_to_html(text, theme_ == "dark", effective_font_px());
+    }
+
+    void apply_brand() {
+        if (!brand_mark_) return;
+        const QString icon = brand_icon_.trimmed();
+        bool shown = false;
+        if (!icon.isEmpty() && QFileInfo::exists(icon)) {
+            QPixmap src(icon);
+            if (!src.isNull()) {
+                QPixmap rounded(50, 50);
+                rounded.fill(Qt::transparent);
+                QPainter painter(&rounded);
+                painter.setRenderHint(QPainter::Antialiasing);
+                QPainterPath clip;
+                clip.addRoundedRect(0, 0, 50, 50, 16, 16);
+                painter.setClipPath(clip);
+                painter.drawPixmap(0, 0,
+                                   src.scaled(50, 50, Qt::KeepAspectRatioByExpanding,
+                                              Qt::SmoothTransformation));
+                painter.end();
+                brand_mark_->setPixmap(rounded);
+                brand_mark_->setText(QString());
+                brand_mark_->setStyleSheet("background:transparent;");
+                shown = true;
+            }
+        }
+        if (!shown && !brand_emoji_.trimmed().isEmpty()) {
+            brand_mark_->setPixmap(QPixmap());
+            brand_mark_->setText(brand_emoji_);
+            brand_mark_->setStyleSheet(QString());
+            shown = true;
+        }
+        brand_mark_->setVisible(shown);
+        if (brand_title_) {
+            brand_title_->setText(app_name_);
+            brand_title_->setVisible(!app_name_.isEmpty());
+        }
+        if (brand_sub_) {
+            brand_sub_->setText(app_subtitle_);
+            brand_sub_->setVisible(!app_subtitle_.isEmpty());
+        }
+        setWindowTitle(app_name_.isEmpty() ? QString("墨记 MoJi") : app_name_);
+    }
+
+    void apply_note_font() {
+        const int px = effective_font_px();
+        if (note_edit_) {
+            note_edit_->setStyleSheet(
+                QString("QTextEdit#NoteEdit{font-size:%1px;}").arg(px));
+        }
+        if (preview_) {
+            preview_->setStyleSheet(
+                QString("QTextBrowser#Preview{font-size:%1px;}").arg(px));
+        }
+        if (page_) page_->set_text_font(px);
+        if (view_page_) view_page_->set_text_font(px);
+        update_preview();
+    }
+
+    static QString with_alpha(const QString& hex, int alpha) {
+        QColor c(hex);
+        if (!c.isValid()) c = QColor("#ffffff");
+        return QString("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(alpha);
+    }
+
+    QString translucent_overrides() const {
+        const int a = theme_ == "dark" ? 200 : 214;
+        return QString(
+                   "QWidget#Root{background:transparent;}"
+                   "QFrame#Sidebar{background:%1;}"
+                   "QFrame#EditorPanel{background:%1;}"
+                   "QFrame#Card{background:%2;}"
+                   "QFrame#StatCard{background:%3;}")
+            .arg(with_alpha(pal_.surface, a), with_alpha(pal_.surface, a - 16),
+                 with_alpha(pal_.surfaceAlt, a - 10));
+    }
+
+    void apply_wallpaper() {
+        if (!root_widget_) return;
+        const bool has = !wallpaper_.isEmpty() && QFileInfo::exists(wallpaper_);
+        if (has) {
+            QString url = QDir::fromNativeSeparators(wallpaper_);
+            url.replace("\"", "%22");
+            root_widget_->setStyleSheet(
+                QString("QWidget#Root{background-color:%1;background-image:url(\"%2\");"
+                        "background-position:center;background-repeat:no-repeat;}")
+                    .arg(pal_.bg, url));
+            qApp->setStyleSheet(build_qss(pal_) + translucent_overrides());
+        } else {
+            root_widget_->setStyleSheet(QString());
+            qApp->setStyleSheet(build_qss(pal_));
+        }
+    }
+
+    void apply_acrylic() {
+#ifdef _WIN32
+        typedef HRESULT(WINAPI * DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
+        static DwmSetWindowAttributeFn set_attr = [] {
+            HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+            return dwm ? (DwmSetWindowAttributeFn)GetProcAddress(dwm, "DwmSetWindowAttribute")
+                       : nullptr;
+        }();
+        HWND hwnd = (HWND)winId();
+        if (set_attr) {
+            BOOL dark = theme_ == "dark";
+            set_attr(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+            int backdrop = acrylic_ ? 3 : 1;  // 3=Acrylic, 1=None
+            set_attr(hwnd, 38 /*DWMWA_SYSTEMBACKDROP_TYPE*/, &backdrop, sizeof(backdrop));
+        }
+        if (acrylic_) {
+            setAttribute(Qt::WA_TranslucentBackground, true);
+        } else {
+            setAttribute(Qt::WA_TranslucentBackground, false);
+        }
+#else
+        (void)acrylic_;
+#endif
+    }
+
+    void apply_window_style() {
+        const int op = std::max(40, std::min(100, opacity_percent_));
+        setWindowOpacity(op / 100.0);
+        apply_wallpaper();
+        apply_acrylic();
+    }
+
+    void open_settings() {
+        QDialog dlg(this);
+        dlg.setWindowTitle("设置");
+        dlg.setMinimumWidth(520);
+        auto* lay = new QVBoxLayout(&dlg);
+        lay->setContentsMargins(20, 18, 20, 16);
+        lay->setSpacing(10);
+
+        auto* appear = new QLabel("外观", &dlg);
+        appear->setProperty("role", "h3");
+        lay->addWidget(appear);
+
+        auto* name_row = new QHBoxLayout();
+        name_row->addWidget(new QLabel("名称", &dlg));
+        auto* name_edit = new QLineEdit(app_name_, &dlg);
+        name_edit->setPlaceholderText("留空则不显示");
+        name_row->addWidget(name_edit, 1);
+        name_row->addWidget(new QLabel("副标题", &dlg));
+        auto* sub_edit = new QLineEdit(app_subtitle_, &dlg);
+        sub_edit->setPlaceholderText("留空则不显示");
+        name_row->addWidget(sub_edit, 1);
+        lay->addLayout(name_row);
+
+        auto* icon_row = new QHBoxLayout();
+        icon_row->addWidget(new QLabel("Logo", &dlg));
+        auto* emoji_edit = new QLineEdit(brand_emoji_, &dlg);
+        emoji_edit->setPlaceholderText("字符/表情，如 墨，留空则隐藏");
+        emoji_edit->setFixedWidth(150);
+        auto* icon_path = new QLineEdit(brand_icon_, &dlg);
+        icon_path->setPlaceholderText("或选择一张图片（优先于字符）");
+        auto* pick_icon = new QPushButton("选择图片", &dlg);
+        auto* clear_icon = new QPushButton("清除", &dlg);
+        connect(pick_icon, &QPushButton::clicked, &dlg, [&] {
+            QString path = QFileDialog::getOpenFileName(
+                &dlg, "选择 Logo 图片", icon_path->text(),
+                "图片 (*.png *.jpg *.jpeg *.bmp *.ico *.svg)");
+            if (!path.isEmpty()) icon_path->setText(path);
+        });
+        connect(clear_icon, &QPushButton::clicked, &dlg, [&] {
+            icon_path->clear();
+            emoji_edit->clear();
+        });
+        icon_row->addWidget(emoji_edit);
+        icon_row->addWidget(icon_path, 1);
+        icon_row->addWidget(pick_icon);
+        icon_row->addWidget(clear_icon);
+        lay->addLayout(icon_row);
+
+        auto* font_row = new QHBoxLayout();
+        font_row->addWidget(new QLabel("正文字号", &dlg));
+        auto* font_spin = new QSpinBox(&dlg);
+        font_spin->setRange(0, 36);
+        font_spin->setSpecialValueText("默认");
+        font_spin->setValue(note_font_px_);
+        font_spin->setSuffix(" px");
+        font_spin->setFixedWidth(110);
+        font_row->addWidget(font_spin);
+        font_row->addSpacing(16);
+        font_row->addWidget(new QLabel("不透明度", &dlg));
+        auto* opacity_slider = new QSlider(Qt::Horizontal, &dlg);
+        opacity_slider->setRange(40, 100);
+        opacity_slider->setValue(opacity_percent_);
+        auto* opacity_value = new QLabel(QString::number(opacity_percent_) + "%", &dlg);
+        connect(opacity_slider, &QSlider::valueChanged, &dlg, [opacity_value](int v) {
+            opacity_value->setText(QString::number(v) + "%");
+        });
+        font_row->addWidget(opacity_slider, 1);
+        font_row->addWidget(opacity_value);
+        lay->addLayout(font_row);
+
+        auto* wall_row = new QHBoxLayout();
+        wall_row->addWidget(new QLabel("壁纸", &dlg));
+        auto* wall_edit = new QLineEdit(wallpaper_, &dlg);
+        wall_edit->setPlaceholderText("留空则使用纯色背景");
+        auto* pick_wall = new QPushButton("选择", &dlg);
+        auto* clear_wall = new QPushButton("清除", &dlg);
+        connect(pick_wall, &QPushButton::clicked, &dlg, [&] {
+            QString path = QFileDialog::getOpenFileName(
+                &dlg, "选择壁纸", wall_edit->text(),
+                "图片 (*.png *.jpg *.jpeg *.bmp *.webp)");
+            if (!path.isEmpty()) wall_edit->setText(path);
+        });
+        connect(clear_wall, &QPushButton::clicked, &dlg, [&] { wall_edit->clear(); });
+        wall_row->addWidget(wall_edit, 1);
+        wall_row->addWidget(pick_wall);
+        wall_row->addWidget(clear_wall);
+        lay->addLayout(wall_row);
+
+        auto* acrylic_box = new QCheckBox("启用亚克力/毛玻璃背景（Windows 11，需重启窗口生效）", &dlg);
+        acrylic_box->setChecked(acrylic_);
+        lay->addWidget(acrylic_box);
+
+        auto* sound = new QLabel("提醒与声音", &dlg);
+        sound->setProperty("role", "h3");
+        lay->addWidget(sound);
+
+        auto* ring_row = new QHBoxLayout();
+        ring_row->addWidget(new QLabel("默认铃声", &dlg));
+        auto* ring_edit = new QLineEdit(ringtone_, &dlg);
+        ring_edit->setPlaceholderText("留空则使用系统提示音");
+        auto* pick_ring = new QPushButton("选择", &dlg);
+        auto* test_ring = new QPushButton("试听", &dlg);
+        auto* clear_ring = new QPushButton("清除", &dlg);
+        connect(pick_ring, &QPushButton::clicked, &dlg, [&] {
+            QString path = QFileDialog::getOpenFileName(
+                &dlg, "选择默认铃声", ring_edit->text(),
+                "音频 (*.wav *.mp3 *.wma *.m4a *.aac *.flac *.ogg);;所有文件 (*.*)");
+            if (!path.isEmpty()) ring_edit->setText(path);
+        });
+        connect(test_ring, &QPushButton::clicked, &dlg, [&] {
+            QString path = ring_edit->text();
+            if (path.isEmpty() || !play_ringtone(path.toStdString(), volume_, false)) {
+                system_beep();
+            }
+        });
+        connect(clear_ring, &QPushButton::clicked, &dlg, [&] { ring_edit->clear(); });
+        ring_row->addWidget(ring_edit, 1);
+        ring_row->addWidget(pick_ring);
+        ring_row->addWidget(test_ring);
+        ring_row->addWidget(clear_ring);
+        lay->addLayout(ring_row);
+
+        auto* vol_row = new QHBoxLayout();
+        vol_row->addWidget(new QLabel("音量", &dlg));
+        auto* vol_slider = new QSlider(Qt::Horizontal, &dlg);
+        vol_slider->setRange(0, 100);
+        vol_slider->setValue(volume_);
+        auto* vol_value = new QLabel(QString::number(volume_) + "%", &dlg);
+        connect(vol_slider, &QSlider::valueChanged, &dlg, [vol_value](int v) {
+            vol_value->setText(QString::number(v) + "%");
+        });
+        vol_row->addWidget(vol_slider, 1);
+        vol_row->addWidget(vol_value);
+        lay->addLayout(vol_row);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        buttons->button(QDialogButtonBox::Ok)->setText("保存");
+        buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+        connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        lay->addWidget(buttons);
+
+        if (dlg.exec() != QDialog::Accepted) return;
+
+        app_name_ = name_edit->text().trimmed();
+        app_subtitle_ = sub_edit->text().trimmed();
+        brand_emoji_ = emoji_edit->text();
+        brand_icon_ = icon_path->text().trimmed();
+        note_font_px_ = font_spin->value();
+        opacity_percent_ = opacity_slider->value();
+        wallpaper_ = wall_edit->text().trimmed();
+        acrylic_ = acrylic_box->isChecked();
+        ringtone_ = ring_edit->text().trimmed();
+        volume_ = vol_slider->value();
+
+        json cfg = repo_.store.load_config();
+        cfg["app_name"] = app_name_.toStdString();
+        cfg["app_subtitle"] = app_subtitle_.toStdString();
+        cfg["brand_emoji"] = brand_emoji_.toStdString();
+        cfg["brand_icon"] = brand_icon_.toStdString();
+        cfg["note_font_size"] = note_font_px_;
+        cfg["opacity"] = opacity_percent_;
+        cfg["wallpaper"] = wallpaper_.toStdString();
+        cfg["acrylic"] = acrylic_;
+        cfg["ringtone"] = ringtone_.toStdString();
+        cfg["volume"] = volume_;
+        repo_.store.save_config(cfg);
+
+        apply_brand();
+        apply_note_font();
+        apply_window_style();
+        if (toast_) toast_->show_message("设置已保存", "外观与声音已更新", "⚙", 2200);
+    }
+
     // ---------- 主题 / 提醒 ----------
     void apply_theme(const QString& name, bool save) {
         theme_ = name == "dark" ? "dark" : "light";
         pal_ = theme_ == "dark" ? make_dark(accent_) : make_light(accent_);
-        qApp->setStyleSheet(build_qss(pal_));
+        apply_wallpaper();
+        apply_acrylic();
         if (light_action_) light_action_->setChecked(theme_ == "light");
         if (dark_action_) dark_action_->setChecked(theme_ == "dark");
         if (theme_button_) theme_button_->setText(theme_ == "dark" ? "浅色主题" : "深色主题");
@@ -3001,6 +3567,7 @@ private:
         update_color_button();
         if (preview_) update_preview();
         if (page_ && current()) {
+            page_->set_dark(theme_ == "dark");
             page_->set_event(current());
             page_->set_note(note_edit_->toPlainText());
         }
@@ -3025,16 +3592,13 @@ private:
     }
 
     void check_reminders() {
+        if (reminder_open_) return;
         auto due = repo_.due_reminders(now_time());
         if (due.empty()) return;
-        play_alert();
-        QString text;
-        for (size_t i = 0; i < due.size() && i < 5; ++i) {
-            if (i) text += "\n";
-            text += "• " + qs(due[i]->title) + "（" + qs(humanize_due(due[i]->due)) + "）";
-        }
-        if (due.size() > 5) text += "\n……以及另外 " + QString::number(due.size() - 5) + " 项";
-        if (toast_) toast_->show_message("⏰ 待办提醒", text, "⏰", 12000);
+
+        // 先记“已提醒”，避免弹窗期间每 500ms 重复触发。
+        repo_.mark_reminded(due, now_time());
+
         int sent = 0;
         for (Event* e : due) {
             if (!e->system_notify || sent >= 5) continue;
@@ -3042,7 +3606,102 @@ private:
                                      "截止 " + qs(humanize_due(e->due)), 12000);
             ++sent;
         }
-        repo_.mark_reminded(due, now_time());
+        show_reminder_dialog(due);
+    }
+
+    // 闹钟式提醒：铃声循环播放，直到用户点“停止”或“稍后再提醒”。
+    void show_reminder_dialog(const std::vector<Event*>& due) {
+        if (due.empty()) return;
+        reminder_open_ = true;
+
+        QDialog dlg(this);
+        dlg.setWindowTitle("墨记 · 待办提醒");
+        dlg.setModal(true);
+        dlg.setMinimumWidth(420);
+        auto* lay = new QVBoxLayout(&dlg);
+        lay->setContentsMargins(22, 20, 22, 16);
+        lay->setSpacing(12);
+
+        auto* head = new QLabel("⏰ 到点提醒", &dlg);
+        head->setStyleSheet("font-size:17pt;font-weight:700;");
+        lay->addWidget(head);
+
+        QStringList lines;
+        for (size_t i = 0; i < due.size() && i < 8; ++i) {
+            lines << "• " + qs(due[i]->title) + "　" + qs(humanize_due(due[i]->due));
+        }
+        if (due.size() > 8) lines << "……以及另外 " + QString::number(due.size() - 8) + " 项";
+        auto* body = new QLabel(lines.join("\n"), &dlg);
+        body->setWordWrap(true);
+        body->setStyleSheet("font-size:11pt;");
+        lay->addWidget(body);
+
+        auto* buttons = new QHBoxLayout();
+        auto* stop = new QPushButton("停止", &dlg);
+        stop->setObjectName("Primary");
+        stop->setMinimumHeight(34);
+        auto* snooze = new QPushButton("5 分钟后再提醒", &dlg);
+        snooze->setMinimumHeight(34);
+        auto* mute = new QPushButton("静音", &dlg);
+        mute->setMinimumHeight(34);
+        buttons->addWidget(mute);
+        buttons->addStretch(1);
+        buttons->addWidget(snooze);
+        buttons->addWidget(stop);
+        lay->addLayout(buttons);
+
+        QString ring = ringtone_;
+        if (ring.isEmpty()) {
+            for (Event* e : due) {
+                if (!e->ringtone.empty()) {
+                    ring = qs(e->ringtone);
+                    break;
+                }
+            }
+        }
+        bool ringing = false;
+        auto start_ring = [&] {
+            if (ring.isEmpty()) {
+                system_beep();
+                return;
+            }
+            ringing = play_ringtone(ring.toStdString(), volume_, true);
+            if (!ringing) system_beep();
+        };
+        start_ring();
+
+        int choice = 0;  // 1=停止 2=稍后 3=静音
+        connect(stop, &QPushButton::clicked, &dlg, [&] { choice = 1; dlg.accept(); });
+        connect(snooze, &QPushButton::clicked, &dlg, [&] { choice = 2; dlg.accept(); });
+        connect(mute, &QPushButton::clicked, &dlg, [&] {
+            stop_ringtone();
+            ringing = false;
+            mute->setEnabled(false);
+        });
+
+        // 每 1.5 秒检查一次：如果系统打断了播放，就重新开始，形成“闹钟”效果。
+        QTimer rearm;
+        rearm.setInterval(1500);
+        connect(&rearm, &QTimer::timeout, &dlg, [&] {
+            if (ringing && !is_ringtone_playing() && mute->isEnabled()) start_ring();
+        });
+        rearm.start();
+
+        dlg.exec();
+        rearm.stop();
+        stop_ringtone();
+
+        if (choice == 2) {
+            const std::time_t until = now_time() + 5 * 60;
+            for (Event* e : due) {
+                try {
+                    repo_.set_snooze(e->id, until);
+                } catch (...) {
+                }
+            }
+            if (toast_) toast_->show_message("稍后提醒", "5 分钟后再次提醒", "⏰", 3000);
+        }
+        reminder_open_ = false;
     }
 
     void show_help() {
@@ -3143,6 +3802,23 @@ private:
     QAction* dark_action_ = nullptr;
     Toast* toast_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
+    QWidget* root_widget_ = nullptr;
+    QLabel* brand_mark_ = nullptr;
+    QLabel* brand_title_ = nullptr;
+    QLabel* brand_sub_ = nullptr;
+    QHBoxLayout* brand_row_ = nullptr;
+    QString app_name_;
+    QString app_subtitle_;
+    QString brand_icon_;
+    QString brand_emoji_;
+    QString wallpaper_;
+    int volume_ = 100;
+    int note_font_px_ = 0;
+    int opacity_percent_ = 100;
+    bool acrylic_ = false;
+    bool reminder_open_ = false;
+    QString current_event_ringtone_;
+    QPushButton* ringtone_button_ = nullptr;
     QTimer* save_timer_ = nullptr;
     QTimer* search_timer_ = nullptr;
     QTimer* relative_timer_ = nullptr;

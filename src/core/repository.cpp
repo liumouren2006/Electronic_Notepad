@@ -136,6 +136,43 @@ Event& Repository::set_visual(const std::string& id,
     return e;
 }
 
+Event& Repository::set_ringtone(const std::string& id, const std::string& path) {
+    Event& e = require(id);
+    push_undo();
+    e.ringtone = path;
+    e.updated_at = now_time();
+    save();
+    return e;
+}
+
+Event& Repository::set_snooze(const std::string& id, std::optional<std::time_t> until) {
+    Event& e = require(id);
+    push_undo();
+    e.snooze_until = until;
+    e.updated_at = now_time();
+    save();
+    return e;
+}
+
+std::optional<std::time_t> Repository::next_reminder_at(std::time_t after) const {
+    std::optional<std::time_t> best;
+    for (const Event& e : events) {
+        if (e.done || !e.due.has_value()) continue;
+        auto moment = e.remind_at();
+        if (!moment.has_value()) continue;
+        if (e.snooze_until.has_value() && *e.snooze_until > *moment) {
+            moment = e.snooze_until;
+        }
+        if (e.last_reminded_at.has_value() && *e.last_reminded_at >= *moment) continue;
+        if (*moment < after) {
+            // 已过点但还没响过：立刻提醒
+            return after;
+        }
+        if (!best.has_value() || *moment < *best) best = moment;
+    }
+    return best;
+}
+
 Event& Repository::set_done(const std::string& id, bool done) {
     Event& e = require(id);
     push_undo();

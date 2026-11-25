@@ -117,6 +117,36 @@ void test_repository() {
         CHECK_EQ(again.find(aid)->color, "#ff0055");
         CHECK(!again.find(aid)->page_layout.empty());
         CHECK(again.find(aid)->system_notify);
+        CHECK_EQ(again.find(aid)->ringtone, std::string());
+
+        // 每事项铃声 + 稍后提醒
+        repo.set_ringtone(aid, "C:/ring.mp3");
+        CHECK_EQ(repo.find(aid)->ringtone, "C:/ring.mp3");
+        // 构造一个“已经到点”的事项：截止 10:00，提前 0 分钟
+        Event& timed = repo.add("闹钟测试", "", parse_datetime("2026-12-02 10:00"), {}, 0);
+        const std::string tid = timed.id;
+        auto has_id = [](const std::vector<Event*>& list, const std::string& id) {
+            for (Event* e : list) {
+                if (e->id == id) return true;
+            }
+            return false;
+        };
+        CHECK(!has_id(repo.due_reminders(parse_datetime("2026-12-02 09:59:59").value()), tid));
+        // 10:00:00 整点就应提醒
+        auto at_1000 = parse_datetime("2026-12-02 10:00:00").value();
+        CHECK(has_id(repo.due_reminders(at_1000), tid));
+        repo.mark_reminded(repo.due_reminders(at_1000), at_1000);
+        CHECK(!has_id(repo.due_reminders(at_1000), tid));
+        // 稍后 5 分钟：在 10:05 之前不响，到点后再次提醒
+        auto snooze_at = at_1000 + 300;
+        repo.set_snooze(tid, snooze_at);
+        CHECK(!has_id(repo.due_reminders(at_1000 + 60), tid));
+        CHECK(has_id(repo.due_reminders(at_1000 + 300), tid));
+        auto next = repo.next_reminder_at(at_1000 + 60);
+        CHECK(next.has_value());
+        CHECK_EQ((long long)*next, (long long)snooze_at);
+        repo.set_snooze(tid, std::nullopt);
+        repo.remove(tid);
         // 查询
         CHECK_EQ(again.pending().size(), (size_t)2);
         CHECK_EQ(again.finished().size(), (size_t)1);

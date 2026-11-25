@@ -41,6 +41,8 @@ struct Event {
     std::optional<std::time_t> updated_at;
     int remind_before = 0;
     bool system_notify = false;  // 提醒时同时发 Windows 系统通知
+    std::string ringtone;        // 该事项的铃声；空 = 使用全局默认铃声
+    std::optional<std::time_t> snooze_until;  // 稍后提醒时间点
     std::optional<std::time_t> last_reminded_at;
     std::string color;
     std::string icon;        // 自定义图标（emoji/字符）

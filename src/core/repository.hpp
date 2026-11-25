@@ -59,6 +59,9 @@ public:
     Event& set_visual(const std::string& id, std::optional<std::string> color,
                       std::optional<std::string> icon = std::nullopt,
                       std::optional<std::string> page_layout = std::nullopt);
+    Event& set_ringtone(const std::string& id, const std::string& path);
+    Event& set_snooze(const std::string& id, std::optional<std::time_t> until);
+    std::optional<std::time_t> next_reminder_at(std::time_t after) const;
     Event& set_done(const std::string& id, bool done);
     Event& toggle_done(const std::string& id);
     bool remove(const std::string& id);

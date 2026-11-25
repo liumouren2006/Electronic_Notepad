@@ -83,6 +83,8 @@ json Event::to_json() const {
                 {"updated_at", time_str(updated_at)},
                 {"remind_before", remind_before},
                 {"system_notify", system_notify},
+                {"ringtone", ringtone},
+                {"snooze_until", time_str(snooze_until)},
                 {"last_reminded_at", time_str(last_reminded_at)},
                 {"color", color},
                 {"icon", icon},
@@ -130,6 +132,8 @@ Event Event::from_json(const json& j) {
     }
     e.remind_before = std::max(0, j.value("remind_before", 0));
     e.system_notify = j.value("system_notify", false);
+    e.ringtone = j.value("ringtone", "");
+    e.snooze_until = opt_time(j, "snooze_until");
     e.last_reminded_at = opt_time(j, "last_reminded_at");
     e.color = j.value("color", "");
     e.icon = j.value("icon", "");
@@ -171,7 +175,14 @@ bool Event::needs_reminder(std::time_t at) const {
         return false;
     }
     auto moment = remind_at();
-    if (!moment.has_value() || at < *moment) {
+    if (!moment.has_value()) {
+        return false;
+    }
+    // 稍后提醒：在贪睡时间点之前不响，到点后视为新的提醒时刻。
+    if (snooze_until.has_value() && *snooze_until > *moment) {
+        moment = snooze_until;
+    }
+    if (at < *moment) {
         return false;
     }
     if (last_reminded_at.has_value() && *last_reminded_at >= *moment) {

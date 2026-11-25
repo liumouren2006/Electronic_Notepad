@@ -1,6 +1,7 @@
 #include "page_view.hpp"
 
 #include <QButtonGroup>
+#include <QFont>
 #include <QColorDialog>
 #include <QFileInfo>
 #include <QGraphicsItem>
@@ -37,6 +38,17 @@ constexpr qreal kPageWidth = 820.0;
 constexpr qreal kPageMinHeight = 1200.0;
 constexpr qreal kTextWidth = 680.0;
 constexpr qreal kInkZ = 1000.0;
+
+QString mdl2(char16_t code) { return QString(QChar(code)); }
+
+void use_icon_font(QWidget* widget, int pt = 11) {
+    QFont f("Segoe MDL2 Assets");
+    f.setPointSize(pt);
+    widget->setFont(f);
+    widget->setStyleSheet(widget->styleSheet() +
+                          QString("font-family:'Segoe MDL2 Assets';font-size:%1pt;")
+                              .arg(pt));
+}
 
 struct InkStroke {
     QColor color = QColor("#1f2430");
@@ -367,14 +379,14 @@ public:
 
         auto* tools = new QHBoxLayout();
         tools->setSpacing(6);
-        select_button_ = new QPushButton("选择", owner);
+        select_button_ = new QPushButton(mdl2(0xE8B0), owner);
         select_button_->setCheckable(true);
         select_button_->setChecked(true);
         select_button_->setToolTip("浏览页面：拖动文字/图片、调整图层");
-        ink_button_ = new QPushButton("墨迹", owner);
+        ink_button_ = new QPushButton(mdl2(0xE70F), owner);
         ink_button_->setCheckable(true);
         ink_button_->setToolTip("在页面上直接书写");
-        eraser_button_ = new QPushButton("橡皮", owner);
+        eraser_button_ = new QPushButton(mdl2(0xE75C), owner);
         eraser_button_->setCheckable(true);
         eraser_button_->setToolTip("点击或拖动擦除墨迹");
         tool_group_ = new QButtonGroup(owner);
@@ -385,6 +397,9 @@ public:
         for (QPushButton* b : {select_button_, ink_button_, eraser_button_}) {
             b->setObjectName("ToolButton");
             b->setCursor(Qt::PointingHandCursor);
+            b->setFixedSize(34, 28);
+            b->setStyleSheet("padding:0;");
+            use_icon_font(b, 11);
         }
         pen_button_ = new QPushButton(owner);
         pen_button_->setObjectName("ToolButton");
@@ -396,11 +411,16 @@ public:
         width_spin_->setValue(4);
         width_spin_->setFixedWidth(62);
         width_spin_->setToolTip("墨迹粗细");
-        auto* undo_ink = new QPushButton("撤销", owner);
-        auto* clear_ink = new QPushButton("清空", owner);
+        auto* undo_ink = new QPushButton(mdl2(0xE7A7), owner);
+        undo_ink->setToolTip("撤销最后一笔");
+        auto* clear_ink = new QPushButton(mdl2(0xE74D), owner);
+        clear_ink->setToolTip("清空墨迹");
         for (QPushButton* b : {undo_ink, clear_ink}) {
             b->setObjectName("ToolButton");
             b->setCursor(Qt::PointingHandCursor);
+            b->setFixedSize(30, 28);
+            b->setStyleSheet("padding:0;");
+            use_icon_font(b, 11);
         }
         tools->addWidget(select_button_);
         tools->addWidget(ink_button_);
@@ -414,13 +434,20 @@ public:
 
         auto* actions = new QHBoxLayout();
         actions->setSpacing(6);
-        auto* add_image = new QPushButton("＋ 加图", owner);
-        auto* front = new QPushButton("置顶", owner);
-        auto* back = new QPushButton("置底", owner);
-        auto* remove_image = new QPushButton("删图", owner);
+        auto* add_image = new QPushButton(mdl2(0xE91B), owner);
+        add_image->setToolTip("添加图片");
+        auto* front = new QPushButton(mdl2(0xE74A), owner);
+        front->setToolTip("把选中图层置顶（可越过墨迹层）");
+        auto* back = new QPushButton(mdl2(0xE74B), owner);
+        back->setToolTip("把选中图层置底");
+        auto* remove_image = new QPushButton(mdl2(0xE711), owner);
+        remove_image->setToolTip("从页面隐藏选中图片（不删除附件）");
         for (QPushButton* b : {add_image, front, back, remove_image}) {
             b->setObjectName("ToolButton");
             b->setCursor(Qt::PointingHandCursor);
+            b->setFixedSize(30, 28);
+            b->setStyleSheet("padding:0;");
+            use_icon_font(b, 11);
         }
         actions->addStretch(1);
         actions->addWidget(add_image);
@@ -502,10 +529,19 @@ public:
         };
     }
 
+    void set_text_font(int px) {
+        text_px_ = std::max(9, px);
+        update_text();
+    }
+
     void set_dark(bool dark) {
         dark_ = dark;
-        view_->setBackgroundBrush(QColor(dark ? "#f4f6fb" : "#f4f6fb"));
+        // 纸张本身跟随主题反相：浅色是白纸，深色是深色纸；视口用更暗的底色衬托。
+        scene_->setBackgroundBrush(QColor(dark ? "#1e2230" : "#ffffff"));
+        view_->setBackgroundBrush(QColor(dark ? "#0e1117" : "#f4f6fb"));
+        if (text_) text_->setDefaultTextColor(QColor(dark ? "#e6e9ef" : "#1c2130"));
         if (owner_->on_layout_changed || text_) update_text();
+        scene_->update();
     }
 
     void set_tool(Tool tool) {
@@ -571,8 +607,8 @@ public:
             }
         }
         text_ = new PageTextItem();
-        text_->setDefaultTextColor(QColor("#1c2130"));
-        text_->setHtml(markdown_to_html(QString::fromStdString(current_.note), false));
+        text_->setDefaultTextColor(QColor(dark_ ? "#e6e9ef" : "#1c2130"));
+        text_->setHtml(markdown_to_html(QString::fromStdString(current_.note), dark_, text_px_));
         text_->setTextWidth(kTextWidth);
         qreal tx = 40, ty = 40, tz = 10;
         if (layout_.contains("text") && layout_["text"].is_object()) {
@@ -588,6 +624,7 @@ public:
 
         ink_ = new InkLayer();
         if (layout_.contains("ink")) ink_->from_json(layout_["ink"]);
+        ink_->setZValue(layout_.value("ink_z", kInkZ));
         scene_->addItem(ink_);
 
         nlohmann::json image_layout = nlohmann::json::array();
@@ -637,7 +674,7 @@ public:
 
     void set_note(const QString& markdown) {
         if (!text_) return;
-        text_->setHtml(markdown_to_html(markdown, false));
+        text_->setHtml(markdown_to_html(markdown, dark_, text_px_));
         update_scene_rect();
     }
 
@@ -710,11 +747,23 @@ private:
     }
     void change_z(bool front) {
         auto selected = scene_->selectedItems();
+        // 没有选中图片/文字时，默认调整文字层，方便“文字置顶/置底”。
+        if (selected.isEmpty() && text_) selected << text_;
+        if (selected.isEmpty()) return;
+        // 在所有图层（含墨迹）之间取最大/最小，保证可以真正压过墨迹层。
+        qreal max_z = -1e9, min_z = 1e9;
+        auto consider = [&](QGraphicsItem* item) {
+            if (!item) return;
+            max_z = std::max(max_z, item->zValue());
+            min_z = std::min(min_z, item->zValue());
+        };
+        consider(text_);
+        consider(ink_);
+        for (auto* item : images_) consider(item);
         for (auto* item : selected) {
-            if (item == ink_) continue;
-            item->setZValue(front ? 900 : 1);
+            item->setZValue(front ? max_z + 10 : min_z - 10);
         }
-        if (!selected.isEmpty()) schedule_save();
+        schedule_save();
     }
     void remove_selected_image() {
         auto selected = scene_->selectedItems();
@@ -748,7 +797,10 @@ private:
         auto hidden = nlohmann::json::array();
         for (const QString& h : hidden_images_) hidden.push_back(h.toStdString());
         out["hidden"] = hidden;
-        if (ink_) out["ink"] = ink_->to_json();
+        if (ink_) {
+            out["ink"] = ink_->to_json();
+            out["ink_z"] = ink_->zValue();
+        }
         layout_ = out;
         if (owner_->on_layout_changed) {
             owner_->on_layout_changed(QString::fromStdString(out.dump()));
@@ -774,6 +826,7 @@ private:
     qreal pen_width_ = 4;
     Tool tool_ = Tool::Select;
     bool read_only_ = false;
+    int text_px_ = 14;
     bool drawing_ = false;
     bool loading_ = false;
     bool dark_ = false;
@@ -792,6 +845,7 @@ void PageEditor::set_event(Event* event) { impl_->set_event(event); }
 void PageEditor::set_note(const QString& markdown) { impl_->set_note(markdown); }
 void PageEditor::set_dark(bool dark) { impl_->set_dark(dark); }
 void PageEditor::set_read_only(bool read_only) { impl_->set_read_only(read_only); }
+void PageEditor::set_text_font(int px) { impl_->set_text_font(px); }
 void PageEditor::set_ink_mode(bool enabled) { impl_->set_ink_mode(enabled); }
 bool PageEditor::ink_mode() const { return impl_->ink_mode(); }
 void PageEditor::refresh_images(Event* event) { impl_->refresh_images(event); }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cctype>
 #include <cstdlib>
 #include <ctime>
 #include <iostream>
@@ -125,6 +126,8 @@ std::string inline_plain(std::string s) {
 
 std::string plain_cell(std::string s) { return inline_plain(s); }
 
+
+
 struct Rgb {
     int r = 255, g = 255, b = 255;
 };
@@ -214,6 +217,193 @@ TuiTheme load_tui_theme(const fs::path& data_dir) {
     } catch (...) {
     }
     return t;
+}
+
+// ---------------------------------------------------------------- TUI 行内 Markdown
+struct InlineStyle {
+    bool bold = false;
+    bool italic = false;
+    bool underline = false;
+    bool strike = false;
+    bool code = false;
+    bool mark = false;
+    bool has_color = false;
+    Rgb color;
+};
+
+struct StyledGlyph {
+    std::string bytes;
+    InlineStyle style;
+};
+
+std::string sgr_for(const InlineStyle& st, const TuiTheme& theme) {
+    std::string out = RESET;
+    if (st.bold) out += "\x1b[1m";
+    if (st.italic) out += "\x1b[3m";
+    if (st.underline) out += "\x1b[4m";
+    if (st.strike) out += "\x1b[9m";
+    Rgb color = st.has_color ? st.color : theme.note_text;
+    if (st.code) color = theme.teal;
+    if (st.mark) color = theme.warning;
+    out += fg(color);
+    return out;
+}
+
+Rgb parse_hex_color(const std::string& text, const Rgb& fallback) {
+    std::string s = text;
+    if (!s.empty() && s[0] == '#') s.erase(s.begin());
+    if (s.size() != 6) return fallback;
+    try {
+        int v = std::stoi(s, nullptr, 16);
+        return Rgb{(v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF};
+    } catch (...) {
+        return fallback;
+    }
+}
+
+size_t utf8_len(unsigned char lead) {
+    if ((lead & 0x80) == 0) return 1;
+    if ((lead & 0xE0) == 0xC0) return 2;
+    if ((lead & 0xF0) == 0xE0) return 3;
+    if ((lead & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+// 把一行 Markdown 拆成带样式的字符；标记本身不进入输出。
+std::vector<StyledGlyph> parse_inline_styled(const std::string& line, const TuiTheme& theme,
+                                             InlineStyle base) {
+    std::vector<StyledGlyph> out;
+    InlineStyle st = base;
+    const std::string* saved_color = nullptr;
+    (void)saved_color;
+    std::vector<Rgb> color_stack;
+    auto push_text = [&](const std::string& bytes) {
+        StyledGlyph g;
+        g.bytes = bytes;
+        g.style = st;
+        out.push_back(g);
+    };
+    size_t i = 0;
+    while (i < line.size()) {
+        // {color:#hex} ... {/color}
+        if (line.compare(i, 7, "{color:") == 0) {
+            size_t close = line.find('}', i + 7);
+            if (close != std::string::npos) {
+                color_stack.push_back(st.has_color ? st.color : theme.note_text);
+                st.has_color = true;
+                st.color = parse_hex_color(line.substr(i + 7, close - i - 7), theme.note_text);
+                i = close + 1;
+                continue;
+            }
+        }
+        if (line.compare(i, 8, "{/color}") == 0) {
+            if (!color_stack.empty()) {
+                st.color = color_stack.back();
+                color_stack.pop_back();
+            }
+            i += 8;
+            continue;
+        }
+        if (line.compare(i, 2, "**") == 0) {
+            st.bold = !st.bold;
+            i += 2;
+            continue;
+        }
+        if (line.compare(i, 2, "++") == 0) {
+            // "C++" 这类紧跟在字母后的加号是正文，不是下划线标记。
+            bool after_word = i > 0 &&
+                              std::isalnum((unsigned char)line[i - 1]) != 0;
+            if (after_word) {
+                push_text("+");
+                ++i;
+                continue;
+            }
+            st.underline = !st.underline;
+            i += 2;
+            continue;
+        }
+        if (line.compare(i, 2, "~~") == 0) {
+            st.strike = !st.strike;
+            i += 2;
+            continue;
+        }
+        if (line.compare(i, 2, "==") == 0) {
+            st.mark = !st.mark;
+            i += 2;
+            continue;
+        }
+        if (line[i] == '`') {
+            st.code = !st.code;
+            ++i;
+            continue;
+        }
+        if (line.compare(i, 2, "__") == 0) {
+            st.bold = !st.bold;
+            i += 2;
+            continue;
+        }
+        if (line[i] == '*') {
+            st.italic = !st.italic;
+            ++i;
+            continue;
+        }
+        // [文字](链接) -> 只显示文字
+        if (line[i] == '[') {
+            size_t rb = line.find(']', i + 1);
+            if (rb != std::string::npos && rb + 1 < line.size() && line[rb + 1] == '(') {
+                size_t rp = line.find(')', rb + 2);
+                if (rp != std::string::npos) {
+                    InlineStyle link = st;
+                    link.underline = true;
+                    link.has_color = true;
+                    link.color = theme.primary;
+                    InlineStyle before = st;
+                    st = link;
+                    std::string text = line.substr(i + 1, rb - i - 1);
+                    for (size_t k = 0; k < text.size();) {
+                        size_t len = std::min(utf8_len((unsigned char)text[k]), text.size() - k);
+                        push_text(text.substr(k, len));
+                        k += len;
+                    }
+                    st = before;
+                    i = rp + 1;
+                    continue;
+                }
+            }
+        }
+        size_t len = std::min(utf8_len((unsigned char)line[i]), line.size() - i);
+        push_text(line.substr(i, len));
+        i += len;
+    }
+    return out;
+}
+
+// 按显示宽度折行，保留每个字符的样式。
+std::vector<std::string> wrap_styled(const std::vector<StyledGlyph>& glyphs, int width,
+                                     const TuiTheme& theme) {
+    std::vector<std::string> lines;
+    if (width <= 0) return lines;
+    std::string current;
+    int used = 0;
+    std::string last_sgr;
+    for (const auto& g : glyphs) {
+        int w = display_width(g.bytes);
+        if (used + w > width && used > 0) {
+            lines.push_back(current + RESET);
+            current.clear();
+            used = 0;
+            last_sgr.clear();
+        }
+        std::string style = sgr_for(g.style, theme);
+        if (style != last_sgr) {
+            current += style;
+            last_sgr = style;
+        }
+        current += g.bytes;
+        used += w;
+    }
+    lines.push_back(current + RESET);
+    return lines;
 }
 
 struct Key {
@@ -822,22 +1012,28 @@ private:
                 }
 
                 const std::string& raw = note_lines[i++];
-                std::string text = inline_plain(raw);
+                InlineStyle base;
+                base.has_color = true;
+                base.color = theme_.note_text;
+                std::string text = raw;
                 std::string prefix;
-                std::string color = fg(theme_.note_text);
                 if (text.rfind("### ", 0) == 0) {
                     text = text.substr(4);
-                    color = fg(theme_.text);
+                    base.bold = true;
+                    base.color = theme_.text;
                 } else if (text.rfind("## ", 0) == 0) {
                     text = text.substr(3);
-                    color = fg(theme_.text);
+                    base.bold = true;
+                    base.color = theme_.text;
                 } else if (text.rfind("# ", 0) == 0) {
                     text = text.substr(2);
-                    color = fg(theme_.text);
+                    base.bold = true;
+                    base.color = theme_.text;
                 } else if (text.rfind("- [x] ", 0) == 0) {
                     text = text.substr(6);
                     prefix = "☑ ";
-                    color = fg(theme_.muted);
+                    base.color = theme_.muted;
+                    base.strike = true;
                 } else if (text.rfind("- [ ] ", 0) == 0) {
                     text = text.substr(6);
                     prefix = "☐ ";
@@ -847,12 +1043,14 @@ private:
                 } else if (text.rfind("> ", 0) == 0) {
                     text = text.substr(2);
                     prefix = "│ ";
-                    color = fg(theme_.muted);
+                    base.color = theme_.muted;
+                    base.italic = true;
                 }
-                auto wrapped = wrap_display(prefix + text, dw - 4);
+                auto glyphs = parse_inline_styled(prefix + text, theme_, base);
+                auto wrapped = wrap_styled(glyphs, dw - 4, theme_);
                 for (const auto& line : wrapped) {
                     if (remaining-- <= 0) break;
-                    add(bg(theme_.detail) + "  " + color + line);
+                    add(bg(theme_.detail) + "  " + line);
                 }
                 if (remaining <= 0) break;
             }
