@@ -33,6 +33,7 @@ std::string lower_ext(const std::string& path) {
 const wchar_t* kAlias = L"moji_ringtone";
 bool g_open = false;
 bool g_looping = false;
+bool g_ps_playing = false;
 
 void mci(const std::wstring& cmd, wchar_t* out = nullptr, size_t size = 0) {
     mciSendStringW(cmd.c_str(), out, (UINT)size, nullptr);
@@ -114,6 +115,7 @@ bool play_ringtone(const std::string& path, int volume_percent, bool loop) {
         if (loop) flags |= SND_LOOP;
         if (PlaySoundW(wide.c_str(), nullptr, flags)) {
             g_looping = loop;
+            g_ps_playing = loop;
             return true;
         }
     }
@@ -128,17 +130,15 @@ void stop_ringtone() {
 #ifdef _WIN32
     close_open_device();
     PlaySoundW(nullptr, nullptr, 0);
+    g_ps_playing = false;
 #endif
 }
 
 bool is_ringtone_playing() {
 #ifdef _WIN32
-    if (!g_open) return false;
-    wchar_t mode[32] = {0};
-    wchar_t cmd[64];
-    swprintf(cmd, 64, L"status %s mode", kAlias);
-    mci(cmd, mode, 32);
-    return wcscmp(mode, L"playing") == 0 || wcscmp(mode, L"paused") == 0;
+    // MCI 的 status 查询在部分设备/驱动上返回空串，直接以“仍打开且为循环模式”为准，
+    // 避免闹钟误判为停止而反复重启。
+    return (g_open && g_looping) || g_ps_playing;
 #else
     return false;
 #endif
