@@ -4,7 +4,7 @@
 
 #define AppName "墨记 MoJi"
 #define AppVersion "1.0.0"
-#define AppPublisher "刘博宇"
+#define AppPublisher "LiBertY6IO"
 #define AppURL "https://github.com/liumouren2006/Electronic_Notepad"
 #define AppExe "moji-gui.exe"
 
