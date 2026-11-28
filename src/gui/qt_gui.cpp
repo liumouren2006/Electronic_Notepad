@@ -2044,7 +2044,7 @@ private:
     QFrame* build_sidebar() {
         auto* side = new QFrame(this);
         side->setObjectName("Sidebar");
-        side->setFixedWidth(252);
+        side->setFixedWidth(300);
         // 侧栏内容放进滚动区：窗口很矮时滚动，而不是让统计卡互相遮挡。
         auto* outer = new QVBoxLayout(side);
         outer->setContentsMargins(0, 0, 0, 0);
