@@ -20,11 +20,15 @@ set "CXXFLAGS=-std=c++17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -Isrc -Ithird_pa
 set "CORE=src\core\util.cpp src\core\model.cpp src\core\elist.cpp src\core\store.cpp src\core\zip.cpp src\core\repository.cpp src\core\importer.cpp src\core\sound.cpp"
 
 echo === Building console moji.exe (CLI / TUI / GUI launcher) ===
-g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
+windres -I srcssets -i srcpp.rc -o buildpp_res.o
+if errorlevel 1 exit /b 1
+g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% buildpp_res.o -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
 if errorlevel 1 exit /b 1
 
 echo === Building Qt GUI moji-gui.exe ===
 if not exist build\qt-build mkdir build\qt-build
+copy /Y srcssetspp.ico build\qt-buildpp.ico >nul
+copy /B srcssetsssets.qrc+,, srcssetsssets.qrc >nul
 pushd build\qt-build
 qmake6 ..\..\moji_gui.pro
 if errorlevel 1 (

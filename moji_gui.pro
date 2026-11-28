@@ -43,3 +43,8 @@ HEADERS += \
 RESOURCES += src/assets/assets.qrc
 
 LIBS += -lshell32 -lole32 -lwinmm
+
+win32 {
+    QMAKE_PRE_LINK += windres -i $$relative_path($$PWD/src/app.rc, $$OUT_PWD) -o app_res.o
+    LIBS += app_res.o
+}
