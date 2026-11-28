@@ -518,6 +518,7 @@ moji
 - [`开发日志.md`](开发日志.md) —— 从 Python 原型到 C++ 主实现的完整过程、踩坑与修复
 - [`需求对照.md`](需求对照.md) —— 作业要求逐条对应
 - [`docs/设计说明.md`](docs/设计说明.md) —— 数据结构、文件格式、函数原型、容错
+- [`docs/代码实现与解读.md`](docs/代码实现与解读.md) —— PC 核心/GUI/TUI/CLI、Android 核心/UI、云同步的代码讲解
 - [`docs/云同步说明.md`](docs/云同步说明.md) —— 邮箱账号、云同步协议、启动大变化提示与服务端
 - [`docs/TUI框架调研.md`](docs/TUI框架调研.md) —— Textual 的 C/C++ 替代品调研与取舍
 - [`android/`](android/) —— Android 客户端（与 PC 共用数据格式与云同步协议）

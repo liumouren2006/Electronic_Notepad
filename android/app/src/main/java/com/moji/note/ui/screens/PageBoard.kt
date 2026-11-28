@@ -70,10 +70,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -89,6 +91,7 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val PAGE_WIDTH = 820f
@@ -214,13 +217,20 @@ fun PageBoard(
     var zoom by remember(event.id) { mutableStateOf(1f) }
     var pan by remember(event.id) { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
+    // Markdown 实测高度（页面坐标）；长笔记时页面随之向下延长，避免被 1200 截断。
+    var textUnits by remember(event.id) { mutableStateOf(0f) }
+    val pageUnits = maxOf(
+        PAGE_HEIGHT,
+        initial.textY + textUnits + 80f,
+        images.maxOfOrNull { it.y + it.h + 80f } ?: 0f,
+    )
 
     fun clampPan(p: Offset, z: Float = zoom): Offset {
         if (viewport.width <= 0 || viewport.height <= 0) return Offset.Zero
         val vw = viewport.width.toFloat()
         val vh = viewport.height.toFloat()
         // 页面按“适宽”排版，所以基准宽度就是视口宽度。
-        val pageH = vw * PAGE_HEIGHT / PAGE_WIDTH
+        val pageH = vw * pageUnits / PAGE_WIDTH
         return Offset(
             p.x.coerceIn(minOf(0f, vw - vw * z), 0f),
             p.y.coerceIn(minOf(0f, vh - pageH * z), 0f),
@@ -262,8 +272,8 @@ fun PageBoard(
         )
     }
 
-    // 旋转屏幕/视口变化后，重新把平移量收进边界。
-    LaunchedEffect(viewport) { pan = clampPan(pan) }
+    // 旋转屏幕、文本变长或视口变化后，重新把平移量收进边界。
+    LaunchedEffect(viewport, pageUnits) { pan = clampPan(pan) }
 
     val layoutBuilder = {
         val root = JSONObject()
@@ -462,7 +472,7 @@ fun PageBoard(
         ) {
             val pageWidth = maxWidth
             val scale = pageWidth.value / PAGE_WIDTH
-            val pageHeight = (PAGE_HEIGHT * scale).dp
+            val pageHeight = (pageUnits * scale).dp
             Box(
                 Modifier
                     .fillMaxSize()
@@ -486,13 +496,32 @@ fun PageBoard(
                             },
                     ) {
                 MaterialTheme(colorScheme = pageScheme) {
-                    Box(
+                    SubcomposeLayout(
                         Modifier
                             .offset((initial.textX * scale).dp, (initial.textY * scale).dp)
                             .width((initial.textW * scale).dp)
+                            .onSizeChanged { size ->
+                                if (size.width > 0) {
+                                    val units = size.height * initial.textW / size.width
+                                    if (abs(units - textUnits) > 2f) textUnits = units
+                                }
+                            }
                             .zIndex(initial.textZ),
-                    ) {
-                        MarkdownView(markdown = event.note, compact = true)
+                    ) { constraints ->
+                        // 以无限高度测量 Markdown，得到完整文本高度；长笔记据此延长页面。
+                        val placeable = subcompose("markdown") {
+                            MarkdownView(markdown = event.note, compact = true)
+                        }.first().measure(
+                            Constraints(
+                                minWidth = constraints.minWidth,
+                                maxWidth = constraints.maxWidth,
+                                minHeight = 0,
+                                maxHeight = Constraints.Infinity,
+                            ),
+                        )
+                        layout(constraints.maxWidth, placeable.height) {
+                            placeable.place(0, 0)
+                        }
                     }
                 }
                 images.forEachIndexed { index, image ->
