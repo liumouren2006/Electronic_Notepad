@@ -371,6 +371,9 @@ protected:
                     scale(factor, factor);
                     zoom_ = target;
                     fit_mode_ = FitMode::None;
+                    // 从“整页”模式手动缩放后恢复滚动条，否则无法查看/平移。
+                    setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+                    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
                 }
             } else {
                 // Ctrl+滚轮：左右滚动
