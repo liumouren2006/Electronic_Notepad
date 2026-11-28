@@ -9,7 +9,7 @@ description = "墨记 MoJi —— 一款带优先级链表、TUI 与 MD 风格 G
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "刘博宇" }]
+authors = [{ name = "LiBertY6IO" }]
 keywords = ["notes", "todo", "tui", "gui", "textual", "pyside6"]
 dependencies = []
 
