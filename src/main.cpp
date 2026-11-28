@@ -30,7 +30,9 @@ using namespace moji;
 
 namespace {
 
-const char* kVersion = "1.0.0";
+#include "version.hpp"
+
+const char* kVersion = MOJI_VERSION;
 bool g_color = false;
 
 fs::path u8path(const std::string& s) {

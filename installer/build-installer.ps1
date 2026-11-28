@@ -1,4 +1,4 @@
-﻿# 重新生成 MoJi-Setup-1.0.0.exe
+﻿# 重新生成 MoJi-Setup-1.2.0.exe
 # 用法：powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1
 param(
     [switch]$SkipBuild
@@ -43,9 +43,9 @@ Write-Host "==> 生成安装包" -ForegroundColor Cyan
 & $iscc (Join-Path $root "installer\moji.iss")
 if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败" }
 
-$out = Join-Path $root "dist\installer\MoJi-Setup-1.0.0.exe"
+$out = Join-Path $root "dist\installer\MoJi-Setup-1.2.0.exe"
 if (-not (Test-Path $out)) { throw "没有找到生成的安装包：$out" }
-$target = Join-Path (Split-Path -Parent $root) "MoJi-Setup-1.0.0.exe"
+$target = Join-Path (Split-Path -Parent $root) "MoJi-Setup-1.2.0.exe"
 Copy-Item $out $target -Force
 Write-Host ""
 Write-Host "安装包：$target" -ForegroundColor Green

@@ -260,6 +260,85 @@ void test_reminder() {
     CHECK(humanize_due(due, now).find("分钟后") != std::string::npos);
 }
 
+void test_sync_merge() {
+    fs::path dir = temp_dir("sync");
+    {
+        Repository repo(dir);
+        Event& a = repo.add("本地较新");
+        a.updated_at = 100;
+        std::string a_id = a.id;
+        auto a_created = a.created_at;
+        Event& b = repo.add("本地较旧");
+        b.updated_at = 300;
+        std::string b_id = b.id;
+        repo.save();
+
+        Event remote_older = *repo.find(a_id);
+        remote_older.title = "远端旧版本";
+        remote_older.updated_at = 50;
+
+        Event remote_newer = *repo.find(b_id);
+        remote_newer.title = "远端新版本";
+        remote_newer.updated_at = 400;
+
+        Event remote_new = Event::create("云端新增");
+        remote_new.id = "cloudnew1";
+        remote_new.created_at = 500;
+        remote_new.updated_at = 500;
+        remote_new.priority = 9;
+
+        Event duplicate = Event::create("本地较新");
+        duplicate.id = "dupid999";
+        duplicate.created_at = a_created;
+        duplicate.updated_at = 999;
+
+        SyncReport report = repo.sync_merge({remote_older, remote_newer, remote_new, duplicate});
+        CHECK_EQ(report.added, 1);
+        CHECK_EQ(report.pulled, 2);
+        CHECK_EQ(report.kept_local, 1);
+        CHECK_EQ(report.skipped, 1);
+        CHECK(repo.find(a_id) != nullptr);
+        CHECK_EQ(repo.find(a_id)->title, std::string("本地较新"));
+        CHECK_EQ(repo.find(b_id)->title, std::string("远端新版本"));
+        CHECK(repo.find("cloudnew1") != nullptr);
+        CHECK(repo.find("dupid999") == nullptr);
+        CHECK_EQ(repo.events.size(), (size_t)3);
+        int expected = 1;
+        for (const Event& e : repo.events) {
+            CHECK_EQ(e.priority, expected++);
+        }
+        CHECK_EQ(repo.find("cloudnew1")->priority, 3);
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+void test_tombstones() {
+    fs::path dir = temp_dir("tomb");
+    {
+        Repository repo(dir);
+        Event& a = repo.add("保留");
+        Event& b = repo.add("待删除");
+        std::string a_id = a.id, b_id = b.id;
+        a.updated_at = 200;
+        b.updated_at = 100;
+        repo.save();
+        std::map<std::string, std::time_t> tombstones{{b_id, 150}};
+        CHECK_EQ(repo.apply_tombstones(tombstones), 1);
+        CHECK(repo.find(a_id) != nullptr);
+        CHECK(repo.find(b_id) == nullptr);
+        Event& c = repo.add("已更新");
+        std::string c_id = c.id;
+        c.updated_at = 300;
+        repo.save();
+        std::map<std::string, std::time_t> older{{c_id, 200}};
+        CHECK_EQ(repo.apply_tombstones(older), 0);
+        CHECK(repo.find(c_id) != nullptr);
+    }
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 void test_cli_style() {
     fs::path dir = temp_dir("cli");
     {
@@ -289,6 +368,8 @@ int main() {
     test_zip();
     test_import_export();
     test_reminder();
+    test_sync_merge();
+    test_tombstones();
     test_cli_style();
     std::cout << "checks=" << g_checks << " failures=" << g_failures << "\n";
     if (g_failures == 0) {

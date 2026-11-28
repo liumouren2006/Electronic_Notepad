@@ -20,11 +20,16 @@ set "CXXFLAGS=-std=c++17 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -Isrc -Ithird_pa
 set "CORE=src\core\util.cpp src\core\model.cpp src\core\elist.cpp src\core\store.cpp src\core\zip.cpp src\core\repository.cpp src\core\importer.cpp src\core\sound.cpp"
 
 echo === Building console moji.exe (CLI / TUI / GUI launcher) ===
-g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
+windres -I src\assets -i src\app.rc -o build\app_res.o
+if errorlevel 1 exit /b 1
+g++ %CXXFLAGS% src\main.cpp src\demo.cpp src\tui\tui.cpp src\gui\launcher.cpp %CORE% build\app_res.o -o build\moji.exe -static -static-libgcc -static-libstdc++ -luser32 -lshell32 -lwinmm
 if errorlevel 1 exit /b 1
 
 echo === Building Qt GUI moji-gui.exe ===
 if not exist build\qt-build mkdir build\qt-build
+copy /Y src\assets\app.ico build\qt-build\app.ico >nul
+REM 刷新 qrc 时间戳：替换 assets 后强制 rcc 重新打包，避免窗口图标仍旧图
+copy /B src\assets\assets.qrc+,, src\assets\assets.qrc >nul
 pushd build\qt-build
 qmake6 ..\..\moji_gui.pro
 if errorlevel 1 (
@@ -62,4 +67,4 @@ echo.
 echo Done:
 echo   build\moji.exe       console / TUI / CLI / "moji gui" launcher
 echo   build\moji-gui.exe   Qt Widgets GUI (with Qt runtime beside it)
-echo   build\test_core.exe  core tests (79 checks)
+echo   build\test_core.exe  core tests (98 checks)

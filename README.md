@@ -121,7 +121,7 @@ bash build.sh
 ```
 build\moji.exe       控制台版：CLI / TUI / GUI（moji gui）
 build\moji-gui.exe   窗口版 Qt GUI（旁边带 Qt 运行库，双击即用）
-build\test_core.exe  C++ 核心测试（79 个检查）
+build\test_core.exe  C++ 核心测试（98 个检查）
 ```
 
 ### 安装到系统
@@ -160,7 +160,7 @@ uninstall.bat -PurgeData   :: 连 %USERPROFILE%\.moji 一起删除
 
 **方式二：图形安装包**
 
-`MoJi-Setup-1.0.0.exe` 是 Inno Setup 生成的标准安装包：
+`MoJi-Setup-1.2.0.exe` 是 Inno Setup 生成的标准安装包：
 
 - 安装到 `%LOCALAPPDATA%\Programs\MoJi`（无需管理员）；
 - 自动生成 `unins000.exe` 卸载程序，并出现在「应用和功能」；
@@ -173,11 +173,11 @@ uninstall.bat -PurgeData   :: 连 %USERPROFILE%\.moji 一起删除
 powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1
 ```
 
-脚本会按需编译程序、调用 Inno Setup 6，并把 `MoJi-Setup-1.0.0.exe` 复制到 `D:\程序设计`。
+脚本会按需编译程序、调用 Inno Setup 6，并把 `MoJi-Setup-1.2.0.exe` 复制到 `D:\程序设计`。
 
 **方式三：便携 zip**
 
-`package.ps1` 可生成便携 zip：`dist\moji-cpp-1.0.0.zip`。
+`package.ps1` 可生成便携 zip：`dist\moji-cpp-1.2.0.zip`。
 
 ### 直接运行构建产物
 
@@ -235,6 +235,23 @@ TUI 使用 ANSI 真彩色，在 Windows Terminal / conhost 中均可运行；建
   - **页面**：OneNote 风格画布，文字层 + 图片层 + 墨迹层；图片拖动、右下角缩放、顶部圆点旋转、置顶/置底/删除；墨迹直接画在页面上。
 - 外观：编辑器「外观」可改事项色条颜色和图标；「视图 → 主题色…」可改主色；「视图 → 选择铃声…」可选 WAV 提醒铃声。
 - 多选：Ctrl+点击切换、Shift+点击范围、Ctrl+Shift+点击追加范围；多选后出现「完成选中 / 删除选中」。
+
+### 云同步（可选）
+
+1. 两种访问方式：
+   - **本地 SSH 隧道（推荐，无需 PC 版 Tailscale）**：双击
+     `D:\程序设计\moji-cloud\启动云同步隧道.bat`，然后在客户端把服务器设为
+     `http://127.0.0.1:18789`；或直接双击
+     `D:\程序设计\moji-cloud\启动云同步隧道并打开墨记.bat` 自动切换并启动。
+   - 已安装并登录 Tailscale（与手机同一账号）时，使用默认 MagicDNS 地址。
+2. 点击侧栏「云同步」或“文件 → 云同步…”；服务器默认
+   `http://dsbot.taild07bbe.ts.net:8789`，也可填 `http://100.116.113.16:8789`。
+3. 填写邮箱和密码登录，没有账号可直接注册。
+4. 登录后点「立即同步」；之后每次启动会自动检查云端：
+   小变化静默合并，云端新增/更新 >= max(4, 本地×25%) 或附件差 >= 5 时弹窗询问。
+5. 不登录也能完整使用本地功能；退出登录不会删除本地数据。
+
+协议、服务端后台和管理员操作见 [`docs/云同步说明.md`](docs/云同步说明.md)。
 
 ### 个性化
 
@@ -421,7 +438,7 @@ int run_qt_gui(int argc, char** argv);                                        //
 build\test_core.exe
 ```
 
-输出：`checks=79 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照。
+输出：`checks=98 failures=0`。覆盖链表顺延、仓储 CRUD、撤销/重做、持久化、损坏恢复、路径穿越、ZIP、JSON/todo.txt/Markdown/打包往返、提醒窗口、CLI 快照、云同步合并。
 
 UI 验证：TUI 已在 ConPTY 中实测新增/编辑/勾选/调序/撤销/退出；Qt GUI 通过 `--screenshot` 离屏渲染浅色/深色截图，并在去掉 MSYS2 PATH 的环境下验证 `moji-gui.exe` + Qt 运行库可独立启动；`moji.exe gui` 启动器也已验证。
 
@@ -501,7 +518,9 @@ moji
 - [`开发日志.md`](开发日志.md) —— 从 Python 原型到 C++ 主实现的完整过程、踩坑与修复
 - [`需求对照.md`](需求对照.md) —— 作业要求逐条对应
 - [`docs/设计说明.md`](docs/设计说明.md) —— 数据结构、文件格式、函数原型、容错
+- [`docs/云同步说明.md`](docs/云同步说明.md) —— 邮箱账号、云同步协议、启动大变化提示与服务端
 - [`docs/TUI框架调研.md`](docs/TUI框架调研.md) —— Textual 的 C/C++ 替代品调研与取舍
+- [`android/`](android/) —— Android 客户端（与 PC 共用数据格式与云同步协议）
 
 ## License
 

@@ -353,7 +353,7 @@ fs::path export_bundle(Repository& repo, const fs::path& path_in) {
     return path;
 }
 
-ImportReport import_bundle(Repository& repo, const fs::path& path, bool merge) {
+std::vector<Event> parse_bundle_events(const fs::path& path) {
     bool ok = false;
     Bytes data = read_bytes(path, ok);
     if (!ok) {
@@ -405,6 +405,11 @@ ImportReport import_bundle(Repository& repo, const fs::path& path, bool merge) {
         } catch (...) {
         }
     }
+    return incoming;
+}
+
+ImportReport import_bundle(Repository& repo, const fs::path& path, bool merge) {
+    auto incoming = parse_bundle_events(path);
     auto fill = [&repo](Event& e) {
         for (auto& pending : e.pending_attachments) {
             Attachment att =
@@ -414,6 +419,19 @@ ImportReport import_bundle(Repository& repo, const fs::path& path, bool merge) {
         e.pending_attachments.clear();
     };
     return repo.import_events(std::move(incoming), merge, fill);
+}
+
+SyncReport sync_merge_bundle(Repository& repo, const fs::path& path) {
+    auto incoming = parse_bundle_events(path);
+    auto fill = [&repo](Event& e) {
+        for (auto& pending : e.pending_attachments) {
+            Attachment att =
+                repo.store.add_attachment_bytes(e.id, pending.first, pending.second);
+            e.attachments.push_back(att);
+        }
+        e.pending_attachments.clear();
+    };
+    return repo.sync_merge(std::move(incoming), fill);
 }
 
 fs::path export_auto(Repository& repo, const fs::path& path) {

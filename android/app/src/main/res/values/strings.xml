@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">墨记</string>
+    <string name="reminder_channel_name">记事提醒</string>
+    <string name="reminder_channel_desc">待办事项到期与提前提醒（锁屏时打开全屏闹钟）</string>
+    <string name="reminder_channel_audible_name">记事提醒（有声）</string>
+    <string name="reminder_channel_audible_desc">设备解锁时使用，直接播放系统闹钟铃声</string>
+</resources>

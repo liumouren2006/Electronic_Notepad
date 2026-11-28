@@ -22,4 +22,13 @@ dist/
 c_legacy/notebook
 c_legacy/notebook.exe
 c_legacy/*.o
+# 本机构建工具与 IDE
+/cmdline-tools.zip
+/gradle-8.9-bin.zip
+/.vscode/
 
+# Android 构建产物 / 本地配置
+/android/local.properties
+/android/.gradle/
+/android/.kotlin/
+/android/**/build/

@@ -519,6 +519,104 @@ ImportReport Repository::import_events(
     return report;
 }
 
+SyncReport Repository::sync_merge(
+    std::vector<Event> incoming,
+    const std::function<void(Event&)>& fill_attachments) {
+    SyncReport report;
+    auto time_of = [](const Event& e) -> std::time_t {
+        return e.updated_at.value_or(e.created_at.value_or(0));
+    };
+    std::vector<Event> merged = events.all_copy();
+    std::map<std::string, size_t> by_id;
+    std::set<std::string> fingerprints;
+    std::set<std::string> remote_ids;
+    for (size_t i = 0; i < merged.size(); ++i) {
+        by_id[merged[i].id] = i;
+        fingerprints.insert(merged[i].title + "\x1f" +
+                            std::to_string(merged[i].created_at.value_or(0)));
+    }
+    for (auto& e : incoming) {
+        if (e.title.empty()) {
+            report.skipped++;
+            continue;
+        }
+        remote_ids.insert(e.id);
+        std::string fp = e.title + "\x1f" + std::to_string(e.created_at.value_or(0));
+        auto it = by_id.find(e.id);
+        if (it != by_id.end()) {
+            Event& local = merged[it->second];
+            if (time_of(e) > time_of(local)) {
+                if (fill_attachments) {
+                    try {
+                        fill_attachments(e);
+                    } catch (...) {
+                    }
+                }
+                e.priority = local.priority;
+                fingerprints.erase(local.title + "\x1f" +
+                                   std::to_string(local.created_at.value_or(0)));
+                merged[it->second] = std::move(e);
+                fingerprints.insert(fp);
+                report.pulled++;
+            } else {
+                report.kept_local++;
+            }
+            continue;
+        }
+        if (fingerprints.count(fp)) {
+            report.skipped++;
+            continue;
+        }
+        if (fill_attachments) {
+            try {
+                fill_attachments(e);
+            } catch (...) {
+            }
+        }
+        by_id[e.id] = merged.size();
+        merged.push_back(std::move(e));
+        fingerprints.insert(fp);
+        report.added++;
+        report.pulled++;
+    }
+    for (const Event& e : merged) {
+        if (!remote_ids.count(e.id)) report.local_only++;
+    }
+    std::stable_sort(merged.begin(), merged.end(), [](const Event& a, const Event& b) {
+        if (a.priority != b.priority) return a.priority < b.priority;
+        return a.created_at.value_or(0) < b.created_at.value_or(0);
+    });
+    for (size_t i = 0; i < merged.size(); ++i) merged[i].priority = static_cast<int>(i) + 1;
+    push_undo();
+    events.load(std::move(merged));
+    save();
+    return report;
+}
+
+int Repository::apply_tombstones(
+    const std::map<std::string, std::time_t>& tombstones) {
+    if (tombstones.empty()) return 0;
+    std::vector<Event> kept;
+    int removed = 0;
+    for (const Event& e : events.all_copy()) {
+        auto it = tombstones.find(e.id);
+        if (it != tombstones.end()) {
+            std::time_t stamp = e.updated_at.value_or(e.created_at.value_or(0));
+            if (stamp <= it->second) {
+                removed++;
+                continue;
+            }
+        }
+        kept.push_back(e);
+    }
+    if (removed > 0) {
+        push_undo();
+        events.load(std::move(kept));
+        save();
+    }
+    return removed;
+}
+
 int Repository::gc_orphans() {
     std::vector<std::string> keep;
     for (const Event& e : events) {

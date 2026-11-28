@@ -44,6 +44,8 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -82,6 +84,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QUuid>
 #include <QWidget>
 
 #ifdef _WIN32
@@ -95,6 +98,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
@@ -103,10 +107,12 @@
 #include <vector>
 
 #include "core/importer.hpp"
+#include "version.hpp"
 #include "core/model.hpp"
 #include "core/repository.hpp"
 #include "core/util.hpp"
 #include "core/sound.hpp"
+#include "gui/cloud_client.hpp"
 #include "gui/markdown.hpp"
 #include "gui/page_view.hpp"
 
@@ -1749,6 +1755,18 @@ private:
 };
 
 // ---------------------------------------------------------------- 主窗口
+struct CloudDiff {
+    int remote_only = 0;
+    int remote_newer = 0;
+    int local_only = 0;
+    int local_newer = 0;
+    int remote_deleted = 0;
+    int local_events = 0;
+    int remote_events = 0;
+    int attachment_delta = 0;
+    bool large = false;
+};
+
 class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(Repository& repo, bool shot_mode = false)
@@ -1769,6 +1787,23 @@ public:
         opacity_percent_ = cfg_.value("opacity", 100);
         wallpaper_ = QString::fromStdString(cfg_.value("wallpaper", std::string("")));
         acrylic_ = cfg_.value("acrylic", false);
+        cloud_server_ = qs(cfg_.value("cloud_server",
+                                     std::string("http://dsbot.taild07bbe.ts.net:8789")));
+        cloud_email_ = qs(cfg_.value("cloud_email", std::string("")));
+        cloud_token_ = qs(cfg_.value("cloud_token", std::string("")));
+        cloud_last_version_ = cfg_.value("cloud_last_version", 0);
+        cloud_skip_version_ = cfg_.value("cloud_skip_version", 0);
+        cloud_last_sync_ = cfg_.value("cloud_last_sync_at", (long long)0);
+        try {
+            const std::string ids_text = cfg_.value("cloud_last_ids", std::string("[]"));
+            json ids = json::parse(ids_text);
+            if (ids.is_array()) {
+                for (const auto& id : ids) {
+                    if (id.is_string()) cloud_last_ids_.insert(qs(id.get<std::string>()));
+                }
+            }
+        } catch (...) {
+        }
         pal_ = theme_ == "dark" ? make_dark(accent_) : make_light(accent_);
         build_ui();
         build_menus();
@@ -1778,6 +1813,73 @@ public:
         if (!shot_mode_) setup_tray();
         apply_note_font();
         apply_window_style();
+
+        cloud_ = new CloudClient(this);
+        cloud_->configure(cloud_server_, cloud_token_);
+        connect(cloud_, &CloudClient::authOk, this,
+                [this](const QString& token, const QString& email, const QString&) {
+                    cloud_token_ = token;
+                    cloud_email_ = email;
+                    cloud_server_ = cloud_->server();
+                    cloud_last_version_ = 0;
+                    cloud_skip_version_ = 0;
+                    cloud_last_sync_ = 0;
+                    cloud_last_ids_.clear();
+                    cloud_deleted_ids_.clear();
+                    cloud_save_config();
+                    update_cloud_ui();
+                    if (cloud_dialog_) cloud_dialog_->accept();
+                    if (toast_) toast_->show_message("云同步", "已登录 " + email, "☁", 2800);
+                    QTimer::singleShot(350, this, [this] { cloud_manual_sync(); });
+                });
+        connect(cloud_, &CloudClient::authFailed, this, [this](const QString& message) {
+            if (cloud_dialog_ && cloud_status_label_) {
+                cloud_status_label_->setText(message);
+                cloud_status_label_->setStyleSheet("color:#d64545;");
+            } else {
+                QMessageBox::warning(this, "云同步", message);
+            }
+        });
+        connect(cloud_, &CloudClient::loggedOut, this, [this] {
+            cloud_token_.clear();
+            cloud_email_.clear();
+            cloud_last_version_ = 0;
+            cloud_last_sync_ = 0;
+            cloud_skip_version_ = 0;
+            cloud_last_ids_.clear();
+            cloud_deleted_ids_.clear();
+            cloud_save_config();
+            update_cloud_ui();
+        });
+        connect(cloud_, &CloudClient::metaReady, this,
+                [this](const CloudMeta& meta) { on_cloud_meta(meta); });
+        connect(cloud_, &CloudClient::metaFailed, this, [this](const QString& message) {
+            cloud_busy_ = false;
+            cloud_startup_ = false;
+            cloud_manual_ = false;
+            cloud_retry_ = false;
+            if (cloud_status_label_) cloud_status_label_->setText(message);
+            if (toast_) toast_->show_message("云同步失败", message, "☁", 6000);
+        });
+        connect(cloud_, &CloudClient::bundleReady, this,
+                [this](const CloudMeta& meta, const QByteArray& data) {
+                    on_cloud_bundle(meta, data);
+                });
+        connect(cloud_, &CloudClient::bundleFailed, this, [this](const QString& message) {
+            cloud_busy_ = false;
+            if (toast_) toast_->show_message("云同步失败", message, "☁", 6000);
+        });
+        connect(cloud_, &CloudClient::uploadOk, this,
+                [this](const CloudMeta& meta) { on_cloud_uploaded(meta); });
+        connect(cloud_, &CloudClient::uploadConflict, this, [this] { on_cloud_conflict(); });
+        connect(cloud_, &CloudClient::uploadFailed, this,
+                [this](const QString& message, int) {
+                    cloud_busy_ = false;
+                    if (toast_) toast_->show_message("云同步失败", message, "☁", 7000);
+                });
+        if (!shot_mode_ && !cloud_token_.isEmpty()) {
+            QTimer::singleShot(1800, this, [this] { cloud_startup_check(); });
+        }
 
         save_timer_ = new QTimer(this);
         save_timer_->setSingleShot(true);
@@ -2059,7 +2161,23 @@ private:
         bottom->addWidget(data_button);
         bottom->addStretch(1);
         layout->addLayout(bottom);
-        auto* local = new QLabel("数据保存在本地\nv1.0.0 · C++17 / Qt", side);
+
+        auto* cloud_row = new QHBoxLayout();
+        cloud_button_ = new QPushButton(cloud_token_.isEmpty() ? "云同步 · 登录" : "云同步", side);
+        cloud_button_->setObjectName("Ghost");
+        cloud_button_->setCursor(Qt::PointingHandCursor);
+        connect(cloud_button_, &QPushButton::clicked, this, [this] { open_cloud_dialog(); });
+        cloud_state_ = new QLabel(side);
+        cloud_state_->setProperty("role", "muted");
+        cloud_state_->setStyleSheet("font-size:9pt;");
+        cloud_state_->setText(cloud_token_.isEmpty() ? "未登录" : cloud_email_);
+        cloud_state_->setToolTip(cloud_server_);
+        cloud_row->addWidget(cloud_button_);
+        cloud_row->addWidget(cloud_state_, 1);
+        layout->addLayout(cloud_row);
+
+        auto* local = new QLabel(
+            QString("数据保存在本地\nv%1 · C++17 / Qt").arg(MOJI_VERSION), side);
         local->setProperty("role", "muted");
         local->setStyleSheet("font-size:9pt;");
         layout->addWidget(local);
@@ -2598,6 +2716,10 @@ private:
         auto* act_export = file->addAction("导出…");
         act_export->setShortcut(QKeySequence("Ctrl+Shift+S"));
         connect(act_export, &QAction::triggered, this, [this] { export_data(); });
+        file->addSeparator();
+        auto* act_cloud = file->addAction("云同步…");
+        act_cloud->setShortcut(QKeySequence("Ctrl+Shift+C"));
+        connect(act_cloud, &QAction::triggered, this, [this] { open_cloud_dialog(); });
         file->addSeparator();
         auto* act_quit = file->addAction("退出");
         act_quit->setShortcut(QKeySequence("Ctrl+Q"));
@@ -3923,6 +4045,36 @@ private:
         vol_row->addWidget(vol_value);
         lay->addLayout(vol_row);
 
+        auto* cloud_label = new QLabel("云同步", &dlg);
+        cloud_label->setProperty("role", "h3");
+        lay->addWidget(cloud_label);
+        auto* cloud_row = new QHBoxLayout();
+        auto* cloud_info = new QLabel(
+            cloud_token_.isEmpty()
+                ? "未登录。登录后可在 PC / Android 之间同步事项、页面墨迹与附件。"
+                : "已登录 " + cloud_email_ + " · " +
+                      (cloud_last_sync_ > 0
+                           ? "上次同步 " + QDateTime::fromSecsSinceEpoch(cloud_last_sync_)
+                                             .toString("MM-dd HH:mm")
+                           : "尚未同步"),
+            &dlg);
+        cloud_info->setWordWrap(true);
+        cloud_info->setProperty("role", "muted");
+        auto* cloud_manage = new QPushButton("登录 / 管理…", &dlg);
+        auto* cloud_sync = new QPushButton("立即同步", &dlg);
+        cloud_sync->setEnabled(!cloud_token_.isEmpty());
+        connect(cloud_manage, &QPushButton::clicked, &dlg, [this, &dlg] {
+            dlg.accept();
+            QTimer::singleShot(0, this, [this] { open_cloud_dialog(); });
+        });
+        connect(cloud_sync, &QPushButton::clicked, &dlg, [this] {
+            QTimer::singleShot(0, this, [this] { cloud_manual_sync(); });
+        });
+        cloud_row->addWidget(cloud_info, 1);
+        cloud_row->addWidget(cloud_sync);
+        cloud_row->addWidget(cloud_manage);
+        lay->addLayout(cloud_row);
+
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
         buttons->button(QDialogButtonBox::Ok)->setText("保存");
         buttons->button(QDialogButtonBox::Cancel)->setText("取消");
@@ -3962,6 +4114,476 @@ private:
         apply_note_font();
         apply_window_style();
         if (toast_) toast_->show_message("设置已保存", "外观与声音已更新", "⚙", 2200);
+    }
+
+    // ---------- 云同步 ----------
+    QString cloud_temp_file() const {
+        return QDir::tempPath() + "/moji-cloud-" + QUuid::createUuid().toString(QUuid::WithoutBraces) +
+               ".mjnote";
+    }
+
+    void cloud_save_config() {
+        json cfg = repo_.store.load_config();
+        cfg["cloud_server"] = cloud_server_.toStdString();
+        cfg["cloud_email"] = cloud_email_.toStdString();
+        cfg["cloud_token"] = cloud_token_.toStdString();
+        cfg["cloud_last_version"] = cloud_last_version_;
+        cfg["cloud_skip_version"] = cloud_skip_version_;
+        cfg["cloud_last_sync_at"] = static_cast<long long>(cloud_last_sync_);
+        QJsonArray ids;
+        for (const QString& id : cloud_last_ids_) ids.append(id);
+        cfg["cloud_last_ids"] = QString(
+            QJsonDocument(ids).toJson(QJsonDocument::Compact)).toStdString();
+        repo_.store.save_config(cfg);
+    }
+
+    void cloud_prepare_deletions() {
+        cloud_deleted_ids_.clear();
+        if (cloud_last_ids_.isEmpty()) return;
+        QSet<QString> current;
+        for (const Event& e : repo_.events) current.insert(qs(e.id));
+        for (const QString& id : cloud_last_ids_) {
+            if (!current.contains(id)) cloud_deleted_ids_.insert(id);
+        }
+    }
+
+    void update_cloud_ui() {
+        if (cloud_button_) {
+            cloud_button_->setText(cloud_token_.isEmpty() ? "云同步 · 登录" : "云同步");
+        }
+        if (cloud_state_) {
+            if (cloud_token_.isEmpty()) {
+                cloud_state_->setText("未登录");
+            } else {
+                QString text = "已登录 " + cloud_email_;
+                if (cloud_last_sync_ > 0) {
+                    text += " · " + QDateTime::fromSecsSinceEpoch(cloud_last_sync_)
+                                        .toString("MM-dd HH:mm");
+                }
+                cloud_state_->setText(text);
+            }
+            cloud_state_->setToolTip(cloud_server_);
+        }
+    }
+
+    CloudDiff cloud_diff(const CloudMeta& meta) const {
+        CloudDiff d;
+        d.local_events = static_cast<int>(repo_.events.size());
+        d.remote_events = meta.updated.size();
+        QHash<QString, qint64> local;
+        int local_attachments = 0;
+        for (const Event& e : repo_.events) {
+            local.insert(qs(e.id), static_cast<qint64>(
+                                       e.updated_at.value_or(e.created_at.value_or(0))));
+            local_attachments += static_cast<int>(e.attachments.size());
+        }
+        for (auto it = meta.updated.constBegin(); it != meta.updated.constEnd(); ++it) {
+            auto found = local.constFind(it.key());
+            if (found == local.constEnd()) {
+                d.remote_only++;
+            } else if (it.value() > found.value()) {
+                d.remote_newer++;
+            }
+        }
+        for (auto it = local.constBegin(); it != local.constEnd(); ++it) {
+            auto remote = meta.updated.constFind(it.key());
+            if (remote == meta.updated.constEnd()) {
+                d.local_only++;
+            } else if (it.value() > remote.value()) {
+                d.local_newer++;
+            }
+        }
+        for (auto it = meta.tombstones.constBegin(); it != meta.tombstones.constEnd(); ++it) {
+            auto local_it = local.constFind(it.key());
+            if (local_it != local.constEnd() && local_it.value() <= it.value()) {
+                d.remote_deleted++;
+            }
+        }
+        d.attachment_delta = std::abs(meta.attachment_count - local_attachments);
+        const int changed = d.remote_only + d.remote_newer + d.remote_deleted;
+        const int threshold = std::max(4, static_cast<int>(std::ceil(local.size() * 0.25)));
+        d.large = (meta.version > 0 && changed >= threshold) || d.attachment_delta >= 5;
+        return d;
+    }
+
+    bool cloud_confirm_large(const CloudDiff& d, bool startup) {
+        QString detail =
+            QString("云端版本有较大变化：\n\n"
+                    "· 新增 %1 条\n· 更新 %2 条\n· 云端删除 %3 条\n"
+                    "· 本地独有 %4 条（会保留并上传）\n· 附件相差 %5 个\n\n"
+                    "同步会在本地合并，同一条记录取更新时间较新的一方。")
+                .arg(d.remote_only)
+                .arg(d.remote_newer)
+                .arg(d.remote_deleted)
+                .arg(d.local_only)
+                .arg(d.attachment_delta);
+        QMessageBox box(this);
+        box.setWindowTitle("云同步");
+        box.setIcon(QMessageBox::Question);
+        box.setText(startup ? "检测到云端数据变化较大，是否现在同步？"
+                            : "云端数据变化较大，是否继续同步？");
+        box.setInformativeText(detail);
+        auto* yes = box.addButton(startup ? "立即同步" : "同步", QMessageBox::AcceptRole);
+        box.addButton(startup ? "暂不同步" : "取消", QMessageBox::RejectRole);
+        box.exec();
+        return box.clickedButton() == yes;
+    }
+
+    void cloud_startup_check() {
+        if (shot_mode_ || cloud_token_.isEmpty() || cloud_busy_) return;
+        cloud_startup_ = true;
+        cloud_manual_ = false;
+        cloud_retry_ = false;
+        cloud_attempts_ = 0;
+        cloud_busy_ = true;
+        cloud_prepare_deletions();
+        cloud_->configure(cloud_server_, cloud_token_);
+        cloud_->fetchMeta();
+    }
+
+    void cloud_manual_sync() {
+        if (cloud_token_.isEmpty()) {
+            open_cloud_dialog();
+            return;
+        }
+        if (cloud_busy_) {
+            if (toast_) toast_->show_message("云同步", "正在同步，请稍候", "☁", 1800);
+            return;
+        }
+        cloud_startup_ = false;
+        cloud_manual_ = true;
+        cloud_retry_ = false;
+        cloud_attempts_ = 0;
+        cloud_busy_ = true;
+        cloud_prepare_deletions();
+        cloud_->configure(cloud_server_, cloud_token_);
+        cloud_->fetchMeta();
+        if (toast_) toast_->show_message("云同步", "正在检查云端…", "☁", 2200);
+    }
+
+    void on_cloud_meta(const CloudMeta& meta) {
+        if (!meta.valid) {
+            cloud_busy_ = false;
+            return;
+        }
+        const bool startup = cloud_startup_;
+        const bool manual = cloud_manual_;
+        const bool retry = cloud_retry_;
+        cloud_startup_ = false;
+        cloud_manual_ = false;
+        cloud_retry_ = false;
+        cloud_meta_ = meta;
+
+        if (!retry) {
+            const CloudDiff diff = cloud_diff(meta);
+            const bool local_changed = diff.local_only > 0 || diff.local_newer > 0 ||
+                                       !cloud_deleted_ids_.isEmpty();
+            if (!manual && meta.version == cloud_last_version_ && !local_changed) {
+                cloud_busy_ = false;
+                return;
+            }
+            if (startup && meta.version > 0 && meta.version == cloud_skip_version_) {
+                cloud_busy_ = false;
+                return;
+            }
+            if (diff.large && !cloud_confirm_large(diff, startup)) {
+                if (startup) {
+                    cloud_skip_version_ = meta.version;
+                    cloud_save_config();
+                }
+                cloud_busy_ = false;
+                return;
+            }
+        }
+
+        if (meta.version <= 0) {
+            if (repo_.events.empty()) {
+                cloud_busy_ = false;
+                if (manual && toast_) {
+                    toast_->show_message("云同步", "云端与本地都还没有数据", "☁", 2400);
+                }
+                return;
+            }
+            cloud_upload_current(0);
+            return;
+        }
+        cloud_->downloadBundle();
+    }
+
+    void on_cloud_bundle(const CloudMeta& meta, const QByteArray& data) {
+        const QString path = cloud_temp_file();
+        {
+            QFile f(path);
+            if (!f.open(QIODevice::WriteOnly)) {
+                cloud_busy_ = false;
+                if (toast_) toast_->show_message("云同步失败", "无法写入临时文件", "☁", 5000);
+                return;
+            }
+            f.write(data);
+        }
+        SyncReport report;
+        try {
+            report = moji::sync_merge_bundle(repo_, fspath(path));
+        } catch (const std::exception& ex) {
+            QFile::remove(path);
+            cloud_busy_ = false;
+            if (toast_) {
+                toast_->show_message("云同步失败",
+                                     QString("合并失败：") + QString::fromUtf8(ex.what()), "☁",
+                                     7000);
+            }
+            return;
+        }
+        QFile::remove(path);
+        cloud_last_report_ = report;
+        std::map<std::string, std::time_t> tombstones;
+        for (auto it = meta.tombstones.constBegin(); it != meta.tombstones.constEnd(); ++it) {
+            tombstones[it.key().toStdString()] = static_cast<std::time_t>(it.value());
+        }
+        // 本地已删除的记录，即使在远端快照里仍存在，也不能在合并时被“复活”。
+        const auto deletion_stamp = static_cast<std::time_t>(
+            QDateTime::currentSecsSinceEpoch());
+        for (const QString& id : cloud_deleted_ids_) {
+            tombstones[id.toStdString()] = deletion_stamp;
+        }
+        const int removed = repo_.apply_tombstones(tombstones);
+        refresh_list(true);
+        if (toast_) {
+            QString extra = removed > 0 ? QString("，按云端删除 %1 条").arg(removed) : QString();
+            toast_->show_message("云同步",
+                                 QString("已合并云端：新增 %1 条，更新 %2 条%3")
+                                     .arg(report.added)
+                                     .arg(std::max(0, report.pulled - report.added))
+                                     .arg(extra),
+                                 "☁", 3200);
+        }
+        cloud_upload_current(meta.version);
+    }
+
+    void cloud_upload_current(int baseVersion) {
+        const QString path = cloud_temp_file();
+        QByteArray bytes;
+        try {
+            const fs::path written = moji::export_bundle(repo_, fspath(path));
+            QFile f(qpath(written));
+            if (!f.open(QIODevice::ReadOnly)) throw std::runtime_error("无法读取打包文件");
+            bytes = f.readAll();
+        } catch (const std::exception& ex) {
+            QFile::remove(path);
+            cloud_busy_ = false;
+            if (toast_) {
+                toast_->show_message("云同步失败",
+                                     QString("生成本地快照失败：") +
+                                         QString::fromUtf8(ex.what()),
+                                     "☁", 7000);
+            }
+            return;
+        }
+        QFile::remove(path);
+        if (bytes.isEmpty()) {
+            cloud_busy_ = false;
+            if (toast_) toast_->show_message("云同步失败", "本地快照为空", "☁", 5000);
+            return;
+        }
+        QStringList deleted;
+        for (const QString& id : cloud_deleted_ids_) deleted.append(id);
+        cloud_->uploadBundle(bytes, baseVersion, deleted);
+    }
+
+    void on_cloud_uploaded(const CloudMeta& meta) {
+        cloud_busy_ = false;
+        cloud_attempts_ = 0;
+        cloud_last_version_ = meta.version;
+        cloud_last_sync_ = static_cast<qint64>(QDateTime::currentSecsSinceEpoch());
+        cloud_skip_version_ = 0;
+        cloud_last_ids_.clear();
+        for (const Event& e : repo_.events) cloud_last_ids_.insert(qs(e.id));
+        cloud_deleted_ids_.clear();
+        cloud_save_config();
+        update_cloud_ui();
+        refresh_list(true);
+        if (cloud_status_label_) {
+            cloud_status_label_->setStyleSheet("color:#0d9b8c;");
+            cloud_status_label_->setText(
+                QString("同步完成 · 云端 v%1 · %2 条记录 / %3 个附件")
+                    .arg(meta.version)
+                    .arg(meta.event_count)
+                    .arg(meta.attachment_count));
+        }
+        if (toast_) {
+            toast_->show_message("云同步完成",
+                                 QString("已同步 %1 条记录 · 云端 v%2")
+                                     .arg(repo_.events.size())
+                                     .arg(meta.version),
+                                 "☁", 3500);
+        }
+    }
+
+    void on_cloud_conflict() {
+        if (cloud_attempts_ < 2) {
+            cloud_attempts_++;
+            cloud_retry_ = true;
+            cloud_->fetchMeta();
+            return;
+        }
+        cloud_busy_ = false;
+        if (toast_) {
+            toast_->show_message("云同步冲突", "云端连续被其他设备更新，请稍后再试", "☁", 6000);
+        }
+    }
+
+    void open_cloud_dialog() {
+        if (cloud_dialog_) {
+            cloud_dialog_->show();
+            cloud_dialog_->raise();
+            cloud_dialog_->activateWindow();
+            return;
+        }
+        auto* dlg = new QDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setWindowTitle("云同步");
+        dlg->setMinimumWidth(590);
+        cloud_dialog_ = dlg;
+        auto* lay = new QVBoxLayout(dlg);
+        lay->setContentsMargins(20, 18, 20, 16);
+        lay->setSpacing(10);
+
+        auto* title = new QLabel("云同步", dlg);
+        title->setProperty("role", "h1");
+        lay->addWidget(title);
+        auto* intro = new QLabel(
+            "登录后可在 PC、Android 与其他设备之间同步事项、Markdown、页面墨迹和附件。\n"
+            "不登录也能完整使用本地功能；打开软件不会强制登录。",
+            dlg);
+        intro->setWordWrap(true);
+        intro->setProperty("role", "muted");
+        lay->addWidget(intro);
+
+        auto* status = new QLabel(dlg);
+        status->setWordWrap(true);
+        status->setProperty("role", "muted");
+        cloud_status_label_ = status;
+
+        if (!cloud_token_.isEmpty()) {
+            auto* info = new QLabel(
+                QString("已登录：<b>%1</b><br>服务器：%2<br>%3")
+                    .arg(cloud_email_.toHtmlEscaped(), cloud_server_.toHtmlEscaped(),
+                         cloud_last_sync_ > 0
+                             ? "上次同步：" + QDateTime::fromSecsSinceEpoch(cloud_last_sync_)
+                                                .toString("yyyy-MM-dd HH:mm")
+                             : "尚未完成过云同步"),
+                dlg);
+            info->setTextFormat(Qt::RichText);
+            info->setWordWrap(true);
+            lay->addWidget(info);
+            auto* buttons = new QHBoxLayout();
+            auto* sync = new QPushButton("立即同步", dlg);
+            sync->setObjectName("Primary");
+            auto* logout = new QPushButton("退出登录", dlg);
+            auto* close = new QPushButton("关闭", dlg);
+            connect(sync, &QPushButton::clicked, dlg, [this, dlg] {
+                dlg->accept();
+                QTimer::singleShot(0, this, [this] { cloud_manual_sync(); });
+            });
+            connect(logout, &QPushButton::clicked, dlg, [this, dlg] {
+                cloud_->logout();
+                dlg->accept();
+                if (toast_) toast_->show_message("云同步", "已退出登录，本地数据不受影响", "☁", 2600);
+            });
+            connect(close, &QPushButton::clicked, dlg, &QDialog::accept);
+            buttons->addWidget(sync);
+            buttons->addWidget(logout);
+            buttons->addStretch(1);
+            buttons->addWidget(close);
+            lay->addLayout(buttons);
+            lay->addWidget(status);
+        } else {
+            auto* server_row = new QHBoxLayout();
+            server_row->addWidget(new QLabel("服务器", dlg));
+            auto* server = new QLineEdit(cloud_server_, dlg);
+            server->setPlaceholderText("http://dsbot.taild07bbe.ts.net:8789");
+            server_row->addWidget(server, 1);
+            lay->addLayout(server_row);
+
+            auto* email_row = new QHBoxLayout();
+            email_row->addWidget(new QLabel("邮箱", dlg));
+            auto* email = new QLineEdit(cloud_email_, dlg);
+            email->setPlaceholderText("you@example.com");
+            email_row->addWidget(email, 1);
+            lay->addLayout(email_row);
+
+            auto* pass_row = new QHBoxLayout();
+            pass_row->addWidget(new QLabel("密码", dlg));
+            auto* password = new QLineEdit(dlg);
+            password->setEchoMode(QLineEdit::Password);
+            password->setPlaceholderText("至少 8 位");
+            pass_row->addWidget(password, 1);
+            lay->addLayout(pass_row);
+
+            auto* name_row = new QHBoxLayout();
+            name_row->addWidget(new QLabel("昵称", dlg));
+            auto* display = new QLineEdit(dlg);
+            display->setPlaceholderText("注册时可选");
+            name_row->addWidget(display, 1);
+            lay->addLayout(name_row);
+
+            auto* buttons = new QHBoxLayout();
+            auto* login = new QPushButton("登录", dlg);
+            login->setObjectName("Primary");
+            auto* reg = new QPushButton("注册", dlg);
+            auto* close = new QPushButton("稍后再说", dlg);
+            connect(login, &QPushButton::clicked, dlg, [this, server, email, password, status] {
+                if (server->text().trimmed().isEmpty() || email->text().trimmed().isEmpty() ||
+                    password->text().isEmpty()) {
+                    status->setStyleSheet("color:#d64545;");
+                    status->setText("请填写服务器、邮箱和密码。");
+                    return;
+                }
+                cloud_server_ = server->text().trimmed();
+                cloud_->configure(cloud_server_, "");
+                status->setStyleSheet("color:#525c72;");
+                status->setText("正在连接服务器…");
+                cloud_->login(email->text().trimmed(), password->text());
+            });
+            connect(reg, &QPushButton::clicked, dlg,
+                    [this, server, email, password, display, status] {
+                        if (server->text().trimmed().isEmpty() ||
+                            email->text().trimmed().isEmpty() ||
+                            password->text().size() < 8) {
+                            status->setStyleSheet("color:#d64545;");
+                            status->setText("请填写服务器和邮箱，密码至少 8 位。");
+                            return;
+                        }
+                        cloud_server_ = server->text().trimmed();
+                        cloud_->configure(cloud_server_, "");
+                        status->setStyleSheet("color:#525c72;");
+                        status->setText("正在注册…");
+                        cloud_->registerAccount(email->text().trimmed(), password->text(),
+                                                display->text());
+                    });
+            connect(close, &QPushButton::clicked, dlg, &QDialog::accept);
+            buttons->addWidget(login);
+            buttons->addWidget(reg);
+            buttons->addStretch(1);
+            buttons->addWidget(close);
+            lay->addLayout(buttons);
+            auto* note = new QLabel(
+                "账号使用邮箱 + 密码，不发送验证邮件。PC 需要安装并登录 Tailscale；"
+                "手机需要与服务器在同一 tailnet。",
+                dlg);
+            note->setWordWrap(true);
+            note->setProperty("role", "muted");
+            lay->addWidget(note);
+            lay->addWidget(status);
+        }
+
+        connect(dlg, &QDialog::destroyed, this, [this] {
+            cloud_dialog_ = nullptr;
+            cloud_status_label_ = nullptr;
+        });
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
     }
 
     // ---------- 主题 / 提醒 ----------
@@ -4137,9 +4759,11 @@ private:
     void show_about() {
         QMessageBox::about(
             this, "关于墨记",
-            "<h3>墨记 MoJi v1.0.0</h3>"
-            "<p>课程设计《电子记事本的实现》C++17 / Qt Widgets 版本。</p>"
-            "<p>优先级单向链表、UTF-8 文本存储、TUI + Qt GUI、附件与手绘、四种导入导出。</p>" +
+            QString("<h3>墨记 MoJi v%1</h3>"
+                    "<p>课程设计《电子记事本的实现》C++17 / Qt Widgets 版本。</p>"
+                    "<p>优先级单向链表、UTF-8 文本存储、TUI + Qt GUI、附件与手绘、"
+                    "四种导入导出、云同步。</p>")
+                    .arg(MOJI_VERSION) +
                 QString("<p style='color:#888'>数据目录：%1</p>").arg(qpath(repo_.store.dir)));
     }
 
@@ -4242,6 +4866,28 @@ private:
     QTimer* search_timer_ = nullptr;
     QTimer* relative_timer_ = nullptr;
     QTimer* remind_timer_ = nullptr;
+
+    // 云同步
+    CloudClient* cloud_ = nullptr;
+    QString cloud_server_;
+    QString cloud_email_;
+    QString cloud_token_;
+    int cloud_last_version_ = 0;
+    int cloud_skip_version_ = 0;
+    qint64 cloud_last_sync_ = 0;
+    bool cloud_startup_ = false;
+    bool cloud_manual_ = false;
+    bool cloud_retry_ = false;
+    bool cloud_busy_ = false;
+    int cloud_attempts_ = 0;
+    QSet<QString> cloud_last_ids_;
+    QSet<QString> cloud_deleted_ids_;
+    CloudMeta cloud_meta_;
+    SyncReport cloud_last_report_;
+    QDialog* cloud_dialog_ = nullptr;
+    QLabel* cloud_status_label_ = nullptr;
+    QLabel* cloud_state_ = nullptr;
+    QPushButton* cloud_button_ = nullptr;
 };
 
 }  // namespace

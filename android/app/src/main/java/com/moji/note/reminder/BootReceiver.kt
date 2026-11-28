@@ -1,0 +1,33 @@
+package com.moji.note.reminder
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import com.moji.note.MojiApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        // 只处理自己声明的系统广播，避免伪造的 Intent 触发重排。
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED &&
+            action != Intent.ACTION_MY_PACKAGE_REPLACED &&
+            action != Intent.ACTION_TIME_CHANGED &&
+            action != Intent.ACTION_TIMEZONE_CHANGED
+        ) return
+        val appContext = context.applicationContext
+        ReminderScheduler.scheduleScan(appContext)
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val repo = MojiApp.repository(appContext)
+                repo.load()
+                ReminderScheduler.scheduleAll(appContext, repo.all())
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+}

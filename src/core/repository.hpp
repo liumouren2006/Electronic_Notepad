@@ -33,6 +33,15 @@ struct ImportReport {
     int skipped = 0;
 };
 
+// 云同步：同 id 取 updated_at 较新的一方；标题+created_at 相同视为同一条。
+struct SyncReport {
+    int added = 0;       // 云端新增
+    int pulled = 0;      // 采用云端版本（新增 + 覆盖）
+    int kept_local = 0;  // 本地较新，保留本地
+    int skipped = 0;     // 指纹重复
+    int local_only = 0;  // 仅本地存在（会随上传带到云端）
+};
+
 class Repository {
 public:
     explicit Repository(const fs::path& data_dir = {});
@@ -97,6 +106,13 @@ public:
     ImportReport import_events(
         std::vector<Event> incoming, bool merge,
         const std::function<void(Event&)>& fill_attachments = {});
+
+    SyncReport sync_merge(
+        std::vector<Event> incoming,
+        const std::function<void(Event&)>& fill_attachments = {});
+
+    // 删除墓碑：云端已删除且本地没有更新过的事件从本地移除。
+    int apply_tombstones(const std::map<std::string, std::time_t>& tombstones);
 
     int gc_orphans();
     std::optional<fs::file_time_type> mtime() const { return store.events_mtime(); }

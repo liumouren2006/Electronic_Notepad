@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>墨记 MoJi · Android 概念图</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #0a1020; color: #eef2fb;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 48px 28px 70px; }
+  header { display: flex; align-items: center; gap: 18px; margin-bottom: 10px; }
+  header img { width: 64px; height: 64px; border-radius: 18px; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: .3px; }
+  .sub { color: #9fb0d0; font-size: 14px; margin-top: 4px; }
+  .note { color: #8293b4; font-size: 13px; line-height: 1.8; margin: 18px 0 30px; max-width: 900px; }
+  .overview { display: block; width: 100%; border-radius: 18px; box-shadow: 0 18px 50px rgba(0,0,0,.4); }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px 28px; margin-top: 40px; }
+  .item { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+          border-radius: 20px; padding: 16px; }
+  .item img { width: 100%; display: block; border-radius: 14px; box-shadow: 0 10px 26px rgba(0,0,0,.35); }
+  .cap { display: flex; align-items: baseline; gap: 9px; margin-top: 13px; }
+  .num { color: #8fa6e8; font-size: 12px; font-weight: 700; letter-spacing: .5px; }
+  .cap b { font-size: 15px; }
+  .cap span { color: #93a6c8; font-size: 12px; margin-left: auto; }
+  footer { margin-top: 44px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.1);
+           color: #7f90b1; font-size: 12px; display: flex; justify-content: space-between; gap: 20px; }
+  @media (max-width: 1000px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } .wrap { padding: 28px 16px 50px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="assets/logo.png" alt="logo">
+    <div>
+      <h1>墨记 MoJi · Android 概念图</h1>
+      <div class="sub">Android 1.2 · Concept Screens · 390 × 844 @3x</div>
+    </div>
+  </header>
+  <p class="note">
+    以下为按 1.2.0 界面结构制作的 HTML/CSS 概念稿，并非真机截图；任务、统计与文件名均为示例数据，
+    系统字体与状态栏会因 ROM 略有差异。
+  </p>
+  <a href="00-overview.png" target="_blank"><img class="overview" src="00-overview.png" alt="总览"></a>
+
+  <div class="grid">
+    <div class="item"><a href="01-home.png" target="_blank"><img src="01-home.png" alt="首页"></a>
+      <div class="cap"><span class="num">01</span><b>首页</b><span>自定义品牌 · 四维统计</span></div></div>
+    <div class="item"><a href="02-alarm.png" target="_blank"><img src="02-alarm.png" alt="全屏闹钟"></a>
+      <div class="cap"><span class="num">02</span><b>全屏闹钟</b><span>锁屏点亮 · 循环铃声</span></div></div>
+    <div class="item"><a href="03-detail.png" target="_blank"><img src="03-detail.png" alt="事项详情"></a>
+      <div class="cap"><span class="num">03</span><b>事项详情</b><span>Markdown 渲染 · 源码切换</span></div></div>
+    <div class="item"><a href="04-editor.png" target="_blank"><img src="04-editor.png" alt="编辑事项"></a>
+      <div class="cap"><span class="num">04</span><b>编辑事项</b><span>每事项铃声 · 草稿保护</span></div></div>
+    <div class="item"><a href="05-brand.png" target="_blank"><img src="05-brand.png" alt="品牌与标题"></a>
+      <div class="cap"><span class="num">05</span><b>品牌与标题</b><span>Logo 裁剪 · GIF · 形状</span></div></div>
+    <div class="item"><a href="06-reminder.png" target="_blank"><img src="06-reminder.png" alt="提醒设置"></a>
+      <div class="cap"><span class="num">06</span><b>提醒设置</b><span>? 帮助 · 音量与权限</span></div></div>
+  </div>
+
+  <footer>
+    <span>MoJi · Android Concept Art · 2026-11-25</span>
+    <span>完整 PNG 与可编辑 HTML/CSS 见本目录</span>
+  </footer>
+</div>
+</body>
+</html>

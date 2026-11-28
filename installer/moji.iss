@@ -1,10 +1,10 @@
 ﻿; 墨记 MoJi · Inno Setup 6 安装脚本
-; 生成：MoJi-Setup-1.0.0.exe（含 unins000.exe）
+; 生成：MoJi-Setup-1.2.0.exe（含 unins000.exe）
 ; 编译：ISCC.exe installer\moji.iss
 
 #define AppName "墨记 MoJi"
-#define AppVersion "1.0.0"
-#define AppPublisher "刘博宇"
+#define AppVersion "1.2.0"
+#define AppPublisher "LiBertY6IO"
 #define AppURL "https://github.com/liumouren2006/Electronic_Notepad"
 #define AppExe "moji-gui.exe"
 
@@ -17,7 +17,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion=1.2.0.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} 电子记事本
 VersionInfoProductName={#AppName}

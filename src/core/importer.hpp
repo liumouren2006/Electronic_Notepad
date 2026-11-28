@@ -18,6 +18,7 @@ void export_markdown(Repository& repo, const fs::path& path);
 
 fs::path export_bundle(Repository& repo, const fs::path& path);
 ImportReport import_bundle(Repository& repo, const fs::path& path, bool merge = true);
+SyncReport sync_merge_bundle(Repository& repo, const fs::path& path);
 
 fs::path export_auto(Repository& repo, const fs::path& path);
 ImportReport import_auto(Repository& repo, const fs::path& path, bool merge = true);

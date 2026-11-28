@@ -1,4 +1,4 @@
-QT += widgets
+QT += widgets network
 CONFIG += c++17 release
 win32: CONFIG += windows
 CONFIG -= debug_and_release
@@ -17,6 +17,7 @@ SOURCES += \
     src/gui_main.cpp \
     src/gui/qt_gui.cpp \
     src/gui/markdown.cpp \
+    src/gui/cloud_client.cpp \
     src/gui/page_view.cpp \
     src/core/util.cpp \
     src/core/model.cpp \
@@ -31,6 +32,7 @@ HEADERS += \
     src/gui/qt_gui.hpp \
     src/gui/gui.hpp \
     src/gui/markdown.hpp \
+    src/gui/cloud_client.hpp \
     src/gui/page_view.hpp \
     src/core/util.hpp \
     src/core/model.hpp \
@@ -43,3 +45,9 @@ HEADERS += \
 RESOURCES += src/assets/assets.qrc
 
 LIBS += -lshell32 -lole32 -lwinmm
+
+# windres 无法在中文路径上写绝对输出文件；在构建目录生成资源对象再用相对路径链接。
+win32 {
+    QMAKE_PRE_LINK += windres -i $$relative_path($$PWD/src/app.rc, $$OUT_PWD) -o app_res.o
+    LIBS += app_res.o
+}
