@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -31,12 +32,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -170,7 +173,14 @@ private fun MojiRoot(vm: MojiViewModel, pendingEventId: MutableState<String?>) {
         accentHex = settings.accentHex,
         dynamicColor = settings.dynamicColor,
     ) {
-        Box(Modifier.fillMaxSize()) {
+        // 详情/编辑/云端登录等全屏页不在 Scaffold 内，需显式提供内容色，
+        // 否则深色模式下默认黑字会与深色背景混在一起。
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
+        ) {
             when {
                 cloudOpen -> CloudScreen(
                     vm = vm,
@@ -291,6 +301,7 @@ private fun MojiRoot(vm: MojiViewModel, pendingEventId: MutableState<String?>) {
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 96.dp),
             )
+        }
         }
         cloudPrompt?.let { prompt ->
             AlertDialog(

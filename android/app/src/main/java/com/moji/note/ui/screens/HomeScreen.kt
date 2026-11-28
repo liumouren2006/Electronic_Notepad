@@ -205,7 +205,13 @@ fun HomeScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "已连接：${settings.syncLabel} · 点击右上角云图标同步",
+                        when {
+                            settings.cloudToken.isNotBlank() ->
+                                "云同步：${settings.cloudEmail.ifBlank { "已登录" }} · 点击右上角云图标管理"
+                            settings.syncLabel.isNotBlank() && settings.syncLabel != "未连接" ->
+                                "本地同步：${settings.syncLabel} · 点击右上角云图标云同步"
+                            else -> "云同步未连接 · 点击右上角云图标登录或设置"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = headerText.copy(alpha = 0.72f),
                         maxLines = 1,

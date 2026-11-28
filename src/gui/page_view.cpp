@@ -305,7 +305,54 @@ public:
     std::function<bool(QPointF, Qt::KeyboardModifiers)> on_move;
     std::function<void()> on_release;
 
+    // 适宽：整页宽度完整显示，纵向可滚动；整页：全部内容缩放到窗口内。
+    void fit_width() {
+        fit_mode_ = FitMode::Width;
+        apply_fit();
+    }
+    void fit_page() {
+        fit_mode_ = FitMode::Page;
+        apply_fit();
+    }
+    void refit_if_auto() {
+        if (fit_mode_ != FitMode::None) apply_fit();
+    }
+
+private:
+    enum class FitMode { None, Width, Page };
+
+    void apply_fit() {
+        if (!scene() || fit_mode_ == FitMode::None || fitting_) return;
+        const QRectF r = scene()->sceneRect();
+        if (r.width() <= 1 || r.height() <= 1) return;
+        if (viewport()->width() < 40 || viewport()->height() < 40) return;
+        fitting_ = true;
+        if (fit_mode_ == FitMode::Page) {
+            setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            fitInView(r.adjusted(-24, -24, 24, 24), Qt::KeepAspectRatio);
+        } else {
+            setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            const qreal factor = viewport()->width() / (r.width() + 32.0);
+            resetTransform();
+            scale(factor, factor);
+        }
+        zoom_ = transform().m11();
+        fitting_ = false;
+    }
+    FitMode fit_mode_ = FitMode::Width;
+    bool fitting_ = false;
+
 protected:
+    void showEvent(QShowEvent* e) override {
+        QGraphicsView::showEvent(e);
+        refit_if_auto();
+    }
+    void resizeEvent(QResizeEvent* e) override {
+        QGraphicsView::resizeEvent(e);
+        refit_if_auto();
+    }
     void wheelEvent(QWheelEvent* e) override {
         int delta = e->angleDelta().y();
         if (delta == 0) delta = e->angleDelta().x();
@@ -323,6 +370,7 @@ protected:
                     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
                     scale(factor, factor);
                     zoom_ = target;
+                    fit_mode_ = FitMode::None;
                 }
             } else {
                 // Ctrl+滚轮：左右滚动
@@ -442,6 +490,17 @@ public:
         back->setToolTip("把选中图层置底");
         auto* remove_image = new QPushButton(mdl2(0xE711), owner);
         remove_image->setToolTip("从页面隐藏选中图片（不删除附件）");
+        auto* fit_width_button = new QPushButton("适宽", owner);
+        fit_width_button->setObjectName("ToolButton");
+        fit_width_button->setToolTip("让页面宽度适配窗口，纵向滚动查看");
+        auto* fit_page_button = new QPushButton("整页", owner);
+        fit_page_button->setObjectName("ToolButton");
+        fit_page_button->setToolTip("缩小到能看见整页；Ctrl+Shift+滚轮可继续缩放");
+        for (QPushButton* b : {fit_width_button, fit_page_button}) {
+            b->setCursor(Qt::PointingHandCursor);
+            b->setFixedHeight(28);
+            b->setMinimumWidth(48);
+        }
         for (QPushButton* b : {add_image, front, back, remove_image}) {
             b->setObjectName("ToolButton");
             b->setCursor(Qt::PointingHandCursor);
@@ -450,6 +509,8 @@ public:
             use_icon_font(b, 11);
         }
         actions->addStretch(1);
+        actions->addWidget(fit_width_button);
+        actions->addWidget(fit_page_button);
         actions->addWidget(add_image);
         actions->addWidget(front);
         actions->addWidget(back);
@@ -483,6 +544,8 @@ public:
                 schedule_save();
             }
         });
+        connect(fit_width_button, &QPushButton::clicked, owner, [this] { view_->fit_width(); });
+        connect(fit_page_button, &QPushButton::clicked, owner, [this] { view_->fit_page(); });
         connect(add_image, &QPushButton::clicked, owner, [this] {
             if (owner_->on_add_image) owner_->on_add_image();
         });
@@ -723,6 +786,7 @@ public:
         update_scene_rect();
         apply_interactive();
         loading_ = false;
+        view_->refit_if_auto();
     }
 
     void update_text() {
@@ -744,6 +808,7 @@ private:
             height = std::max(height, item->pos().y() + item->boundingRect().height() + 120);
         }
         scene_->setSceneRect(0, 0, kPageWidth, height);
+        view_->refit_if_auto();
     }
     void change_z(bool front) {
         auto selected = scene_->selectedItems();

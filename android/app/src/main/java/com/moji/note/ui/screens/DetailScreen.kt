@@ -454,12 +454,11 @@ fun DetailScreen(
                 }
             }
         } else {
-            Column(
+            Box(
                 Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp)
-                    .padding(top = 12.dp, bottom = 32.dp),
+                    .padding(top = 12.dp, bottom = 8.dp),
             ) {
                 PageBoard(
                     event = event,
@@ -467,6 +466,7 @@ fun DetailScreen(
                     initialLayout = event.pageLayout,
                     resolveFile = vm.repository::resolveAttachment,
                     onSave = { vm.updatePageLayout(event.id, it) },
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }

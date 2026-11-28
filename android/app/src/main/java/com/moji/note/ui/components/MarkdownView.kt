@@ -136,16 +136,62 @@ private fun parseBlocks(markdown: String): List<MdBlock> {
 private fun parseRow(line: String): List<String> =
     line.trim().trim('|').split('|').map { it.trim() }
 
+private fun isAsciiAlnum(c: Char?): Boolean =
+    c != null && (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9')
+
 private fun inlineMarkdown(raw: String, linkColor: Color): AnnotatedString = buildAnnotatedString {
     var i = 0
     val text = raw
     while (i < text.length) {
         val two = if (i + 1 < text.length) text.substring(i, i + 2) else ""
+        val three = if (i + 2 < text.length) text.substring(i, i + 3) else ""
         when {
+            three == "***" -> {
+                val end = text.indexOf("***", i + 3)
+                if (end > i + 3 && !text[i + 3].isWhitespace()) {
+                    pushStyle(
+                        SpanStyle(
+                            fontWeight = FontWeight.Bold,
+                            fontStyle = FontStyle.Italic,
+                        ),
+                    )
+                    append(text.substring(i + 3, end))
+                    pop()
+                    i = end + 3
+                } else {
+                    append("***")
+                    i += 3
+                }
+            }
             two == "**" || two == "__" -> {
                 val end = text.indexOf(two, i + 2)
                 if (end > i + 1) {
                     pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                    append(text.substring(i + 2, end))
+                    pop()
+                    i = end + 2
+                } else {
+                    append(two)
+                    i += 2
+                }
+            }
+            two == "++" && !isAsciiAlnum(text.getOrNull(i - 1)) &&
+                i + 2 < text.length && !text[i + 2].isWhitespace() -> {
+                val end = text.indexOf("++", i + 2)
+                if (end > i + 2 && !text[end - 1].isWhitespace()) {
+                    pushStyle(SpanStyle(textDecoration = TextDecoration.Underline))
+                    append(text.substring(i + 2, end))
+                    pop()
+                    i = end + 2
+                } else {
+                    append(two)
+                    i += 2
+                }
+            }
+            two == "==" && i + 2 < text.length && !text[i + 2].isWhitespace() -> {
+                val end = text.indexOf("==", i + 2)
+                if (end > i + 2 && !text[end - 1].isWhitespace()) {
+                    pushStyle(SpanStyle(background = linkColor.copy(alpha = 0.20f)))
                     append(text.substring(i + 2, end))
                     pop()
                     i = end + 2

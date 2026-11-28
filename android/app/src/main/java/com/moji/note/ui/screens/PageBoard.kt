@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,8 +15,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,7 +31,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.outlined.AutoFixOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
@@ -48,20 +56,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.moji.note.data.Attachment
@@ -75,6 +89,7 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.roundToInt
 
 private const val PAGE_WIDTH = 820f
 private const val PAGE_HEIGHT = 1200f
@@ -175,6 +190,7 @@ fun PageBoard(
     initialLayout: String,
     resolveFile: (Attachment) -> File?,
     onSave: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val darkPage = MaterialTheme.colorScheme.background.luminance() < 0.5f
@@ -195,6 +211,59 @@ fun PageBoard(
     var lastSavedRevision by remember { mutableIntStateOf(0) }
     var savedOnce by remember { mutableStateOf(true) }
     var showImagePicker by remember { mutableStateOf(false) }
+    var zoom by remember(event.id) { mutableStateOf(1f) }
+    var pan by remember(event.id) { mutableStateOf(Offset.Zero) }
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+
+    fun clampPan(p: Offset, z: Float = zoom): Offset {
+        if (viewport.width <= 0 || viewport.height <= 0) return Offset.Zero
+        val vw = viewport.width.toFloat()
+        val vh = viewport.height.toFloat()
+        // 页面按“适宽”排版，所以基准宽度就是视口宽度。
+        val pageH = vw * PAGE_HEIGHT / PAGE_WIDTH
+        return Offset(
+            p.x.coerceIn(minOf(0f, vw - vw * z), 0f),
+            p.y.coerceIn(minOf(0f, vh - pageH * z), 0f),
+        )
+    }
+
+    fun zoomAt(target: Float, focal: Offset) {
+        val next = target.coerceIn(1f, 4f)
+        if (next == zoom) return
+        val ratio = next / zoom
+        zoom = next
+        pan = clampPan(
+            Offset(
+                focal.x + (pan.x - focal.x) * ratio,
+                focal.y + (pan.y - focal.y) * ratio,
+            ),
+            next,
+        )
+    }
+
+    fun zoomTo(target: Float) {
+        zoomAt(
+            target,
+            Offset(viewport.width / 2f, viewport.height / 2f),
+        )
+    }
+
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val next = (zoom * zoomChange).coerceIn(1f, 4f)
+        val focal = Offset(viewport.width / 2f, viewport.height / 2f)
+        val ratio = next / zoom
+        zoom = next
+        pan = clampPan(
+            Offset(
+                focal.x + (pan.x - focal.x) * ratio + panChange.x,
+                focal.y + (pan.y - focal.y) * ratio + panChange.y,
+            ),
+            next,
+        )
+    }
+
+    // 旋转屏幕/视口变化后，重新把平移量收进边界。
+    LaunchedEffect(viewport) { pan = clampPan(pan) }
 
     val layoutBuilder = {
         val root = JSONObject()
@@ -256,7 +325,7 @@ fun PageBoard(
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxSize()) {
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -290,6 +359,33 @@ fun PageBoard(
                     leadingIcon = { Icon(Icons.Outlined.AutoFixOff, null, modifier = Modifier.size(16.dp)) },
                     shape = RoundedCornerShape(10.dp),
                 )
+                IconButton(
+                    onClick = { zoomTo(zoom / 1.25f) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(Icons.Filled.ZoomOut, "缩小页面", modifier = Modifier.size(18.dp))
+                }
+                Text(
+                    "${(zoom * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.width(38.dp),
+                    textAlign = TextAlign.Center,
+                )
+                IconButton(
+                    onClick = { zoomTo(zoom * 1.25f) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(Icons.Filled.ZoomIn, "放大页面", modifier = Modifier.size(18.dp))
+                }
+                IconButton(
+                    onClick = {
+                        zoom = 1f
+                        pan = Offset.Zero
+                    },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(Icons.Filled.FitScreen, "适应宽度", modifier = Modifier.size(18.dp))
+                }
                 for (hex in listOf("#1f2430", "#4f6ef7", "#e5484d", "#12a594", "#f5a524")) {
                     Box(
                         Modifier
@@ -358,14 +454,37 @@ fun PageBoard(
         Spacer(Modifier.height(10.dp))
         BoxWithConstraints(
             Modifier
+                .weight(1f)
                 .fillMaxWidth()
                 .shadow(3.dp, RoundedCornerShape(6.dp))
                 .clip(RoundedCornerShape(6.dp))
                 .background(if (darkPage) Color(0xFF1E2230) else Color(0xFFFFFEFA)),
         ) {
-            val scale = maxWidth.value / PAGE_WIDTH
+            val pageWidth = maxWidth
+            val scale = pageWidth.value / PAGE_WIDTH
             val pageHeight = (PAGE_HEIGHT * scale).dp
-            Box(Modifier.fillMaxWidth().height(pageHeight)) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clipToBounds()
+                    .onSizeChanged { viewport = it }
+                    .then(if (mode == "select") Modifier.transformable(transformState) else Modifier),
+            ) {
+                Box(
+                    Modifier
+                        .offset { IntOffset(pan.x.roundToInt(), pan.y.roundToInt()) }
+                        .requiredWidth(pageWidth)
+                        .requiredHeight(pageHeight),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = zoom
+                                scaleY = zoom
+                                transformOrigin = TransformOrigin(0f, 0f)
+                            },
+                    ) {
                 MaterialTheme(colorScheme = pageScheme) {
                     Box(
                         Modifier
@@ -480,11 +599,13 @@ fun PageBoard(
                         }
                     }
                 }
+                    }
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "页面尺寸 820 × 1200，与 PC 端 page_layout 完全一致；笔迹自动保存。",
+            "双指缩放 · 选择模式下拖动平移 · 笔迹自动保存（页面 820 × 1200，与 PC 一致）",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

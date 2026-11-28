@@ -1922,7 +1922,7 @@ public:
         int w = cfg_.contains("window") ? cfg_["window"].value("w", 1280) : 1280;
         int h = cfg_.contains("window") ? cfg_["window"].value("h", 820) : 820;
         resize(std::max(1020, w), std::max(660, h));
-        setMinimumSize(1020, 660);
+        setMinimumSize(1120, 660);
         setAcceptDrops(true);
     }
 
@@ -2035,7 +2035,7 @@ private:
         splitter_->addWidget(build_editor_stack());
         splitter_->setStretchFactor(0, 0);
         splitter_->setStretchFactor(1, 1);
-        splitter_->setSizes({420, 680});
+        splitter_->setSizes({340, 760});
         root_layout->addWidget(splitter_, 1);
         setCentralWidget(root);
         statusBar()->showMessage("墨记 MoJi　·　数据保存在本地，修改自动保存");
@@ -2248,9 +2248,18 @@ private:
 
     QStackedWidget* build_editor_stack() {
         editor_stack_ = new QStackedWidget(this);
-        editor_stack_->setMinimumWidth(430);
+        editor_stack_->setMinimumWidth(500);
         editor_stack_->addWidget(build_view_page());
-        editor_stack_->addWidget(build_editor());
+        // 窗口较矮时让整个编辑面板纵向滚动，保证备注区（尤其“页面”）不被压扁。
+        auto* edit_page = build_editor();
+        // 宽度仍随右栏收缩（不让横向滚动条出现），高度不足时纵向滚动。
+        edit_page->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        auto* edit_scroll = new QScrollArea(editor_stack_);
+        edit_scroll->setWidgetResizable(true);
+        edit_scroll->setFrameShape(QFrame::NoFrame);
+        edit_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        edit_scroll->setWidget(edit_page);
+        editor_stack_->addWidget(edit_scroll);
         editor_stack_->setCurrentIndex(0);
         editor_stack_->hide();
         return editor_stack_;
@@ -2550,6 +2559,7 @@ private:
 
         note_tabs_ = new QTabWidget(panel);
         note_tabs_->setObjectName("NoteTabs");
+        note_tabs_->setMinimumHeight(300);
         auto* edit_tab = new QWidget(note_tabs_);
         auto* edit_layout = new QVBoxLayout(edit_tab);
         edit_layout->setContentsMargins(0, 0, 0, 0);
@@ -2620,7 +2630,6 @@ private:
             if (index == 2) {
                 if (Event* e = current()) page_->set_event(e);
             }
-            if (att_panel_) att_panel_->setVisible(index != 2);
         });
         layout->addWidget(note_tabs_, 1);
 
@@ -2632,11 +2641,10 @@ private:
             if (page_) page_->set_note(note_edit_->toPlainText());
         });
 
-        att_panel_ = new QWidget(panel);
+        att_panel_ = new QWidget(note_tabs_);
         auto* att_panel_layout = new QVBoxLayout(att_panel_);
-        att_panel_layout->setContentsMargins(0, 0, 0, 0);
-        att_panel_layout->setSpacing(4);
-        att_panel_->setMaximumHeight(170);
+        att_panel_layout->setContentsMargins(10, 8, 10, 8);
+        att_panel_layout->setSpacing(6);
 
         auto* att_header = new QHBoxLayout();
         auto* att_title = new QLabel("附件", panel);
@@ -2663,8 +2671,8 @@ private:
         };
         connect(att_list_, &QListWidget::itemDoubleClicked, this,
                 [this](QListWidgetItem* item) { open_attachment(item); });
-        att_panel_layout->addWidget(att_list_);
-        layout->addWidget(att_panel_);
+        att_panel_layout->addWidget(att_list_, 1);
+        note_tabs_->addTab(att_panel_, "附件");
 
         status_label_ = new QLabel("", panel);
         status_label_->setProperty("role", "muted");
@@ -3106,8 +3114,8 @@ private:
         QList<int> sizes = splitter_->sizes();
         if (sizes.size() == 2 && sizes[1] > 300) detail_width_ = sizes[1];
         int total = std::max(700, splitter_->width());
-        // 中间列表至少保留约 480px，详情最多 760px，避免卡片被挤得太窄。
-        int right = std::max(430, std::min(760, std::min(detail_width_, total - 480)));
+        // 中间列表至少保留 320px，详情最多 820px，把空间优先给编辑/预览/页面。
+        int right = std::max(480, std::min(820, std::min(detail_width_, total - 320)));
         splitter_->setSizes({total - right, right});
     }
 
